@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS planner_runs(id VARCHAR(64) PRIMARY KEY,game_id VARCHAR(64),admin_id VARCHAR(64),provider VARCHAR(32),config JSON,valid BOOLEAN,attempts INT,latency_ms BIGINT,cost_usd DECIMAL(12,6),created_at BIGINT);

@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS activities(game_id VARCHAR(64),id VARCHAR(64),version INT NOT NULL,config JSON NOT NULL,active BOOLEAN NOT NULL DEFAULT TRUE,PRIMARY KEY(game_id,id));
+CREATE TABLE IF NOT EXISTS events(game_id VARCHAR(64),player_id VARCHAR(64),event_id VARCHAR(128),event_type VARCHAR(64),amount BIGINT,source VARCHAR(16),created_at BIGINT,PRIMARY KEY(game_id,player_id,event_id));
+CREATE TABLE IF NOT EXISTS activity_progress(game_id VARCHAR(64),player_id VARCHAR(64),activity_id VARCHAR(64),version INT,bucket VARCHAR(16),progress BIGINT NOT NULL,PRIMARY KEY(game_id,player_id,activity_id,version,bucket));

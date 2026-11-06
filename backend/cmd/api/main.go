@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"miniverse/backend/internal/app"
@@ -9,6 +10,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "api:", err)
 		os.Exit(1)

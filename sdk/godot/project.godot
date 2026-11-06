@@ -1,0 +1,6 @@
+config_version=5
+[application]
+config/name="MiniVerse SDK Demo"
+run/main_scene="res://demo.tscn"
+[rendering]
+renderer/rendering_method="gl_compatibility"

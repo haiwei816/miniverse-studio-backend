@@ -1,0 +1,6 @@
+syntax = "proto3";
+package miniverse.rule.v1;
+option go_package = "miniverse/backend/internal/rulepb";
+service RuleCore { rpc Replay(ReplayRequest) returns (ReplayResult); }
+message ReplayRequest { string version = 1; uint32 seed = 2; repeated uint32 actions = 3; }
+message ReplayResult { bool valid = 1; int64 score = 2; uint64 state_hash = 3; string error = 4; bool finished = 5; bool victory = 6; }

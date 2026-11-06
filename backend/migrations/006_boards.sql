@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS boards(game_id VARCHAR(64),id VARCHAR(64),season VARCHAR(64),mode VARCHAR(8),starts_at BIGINT,ends_at BIGINT,frozen BOOLEAN DEFAULT FALSE,settled BOOLEAN DEFAULT FALSE,item VARCHAR(64),reward_amount BIGINT,PRIMARY KEY(game_id,id,season));
+CREATE TABLE IF NOT EXISTS scores(game_id VARCHAR(64),board_id VARCHAR(64),season VARCHAR(64),player_id VARCHAR(64),score BIGINT,reached_at BIGINT,PRIMARY KEY(game_id,board_id,season,player_id),INDEX ranking(game_id,board_id,season,score,reached_at));
+CREATE TABLE IF NOT EXISTS score_events(game_id VARCHAR(64),board_id VARCHAR(64),season VARCHAR(64),player_id VARCHAR(64),request_id VARCHAR(128),PRIMARY KEY(game_id,board_id,season,player_id,request_id));

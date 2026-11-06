@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';import{api,login}from'./client.mjs';
+const a=await login(),b=await login();const p='/v1/games/sky-island/profile';
+await api(p,'GET',undefined,undefined,401);
+await api(p,'PATCH',{name:'player-a'},a.access_token);
+assert.equal((await api(p,'GET',undefined,a.access_token)).name,'player-a');
+assert.equal((await api(p,'GET',undefined,b.access_token)).name,'');
+await api('/v1/games/missing/profile','GET',undefined,a.access_token,404);
+assert.equal((await api('/v1/auth/guest','POST',{secret:a.secret})).player_id,a.player_id);
+await api('/v1/auth/guest','POST',{secret:'forged'},undefined,401);
+await api('/v1/auth/logout','POST',{},a.access_token);
+await api(p,'GET',undefined,a.access_token,401);
+console.log('S1 identity ownership, credentials, game scope, logout: PASS');

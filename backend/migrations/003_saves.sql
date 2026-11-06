@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS saves(game_id VARCHAR(64),player_id VARCHAR(64),slot VARCHAR(64),revision BIGINT NOT NULL DEFAULT 0,schema_version INT NOT NULL DEFAULT 1,body MEDIUMBLOB,checksum CHAR(64) NOT NULL DEFAULT '',deleted BOOLEAN NOT NULL DEFAULT TRUE,PRIMARY KEY(game_id,player_id,slot));
+CREATE TABLE IF NOT EXISTS save_history(game_id VARCHAR(64),player_id VARCHAR(64),slot VARCHAR(64),revision BIGINT,schema_version INT NOT NULL,body MEDIUMBLOB,checksum CHAR(64),deleted BOOLEAN NOT NULL,PRIMARY KEY(game_id,player_id,slot,revision));

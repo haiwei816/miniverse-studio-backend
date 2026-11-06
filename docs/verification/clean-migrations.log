@@ -1,0 +1,12 @@
+migrate-1  | 2026/11/06 12:28:24 applied 001_bootstrap.sql
+migrate-1  | 2026/11/06 12:28:24 applied 002_identity.sql
+migrate-1  | 2026/11/06 12:28:24 applied 003_saves.sql
+migrate-1  | 2026/11/06 12:28:24 applied 004_activities.sql
+migrate-1  | 2026/11/06 12:28:25 applied 005_rewards.sql
+migrate-1  | 2026/11/06 12:28:25 applied 006_boards.sql
+migrate-1  | 2026/11/06 12:28:25 applied 007_gm.sql
+migrate-1  | 2026/11/06 12:28:25 applied 008_operations.sql
+migrate-1  | 2026/11/06 12:28:25 applied 009_second_game.sql
+migrate-1  | 2026/11/06 12:28:25 applied 010_platform.sql
+migrate-1  | 2026/11/06 12:28:25 applied 011_planner.sql
+migrate-1  | 2026/11/06 12:28:25 applied 012_rulecore.sql

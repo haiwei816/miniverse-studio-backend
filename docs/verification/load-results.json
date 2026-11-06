@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-06T12:21:04.474Z",
+  "scope": "local Docker sandbox, authenticated profile reads, no production capacity claim",
+  "requests": 100,
+  "concurrency": 10,
+  "errors": 0,
+  "error_details": [],
+  "elapsed_ms": 130.3043,
+  "requests_per_second": 767.4343824417152,
+  "p50_ms": 11.814300000000003,
+  "p95_ms": 29.470900000000015,
+  "p99_ms": 31.512699999999995
+}

@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS admins(id VARCHAR(64) PRIMARY KEY,password_hash CHAR(64),salt VARCHAR(64),role VARCHAR(16));
+CREATE TABLE IF NOT EXISTS gm_access(admin_id VARCHAR(64),game_id VARCHAR(64),PRIMARY KEY(admin_id,game_id));
+CREATE TABLE IF NOT EXISTS gm_sessions(token_hash CHAR(64) PRIMARY KEY,admin_id VARCHAR(64),expires_at BIGINT);
+CREATE TABLE IF NOT EXISTS audits(id BIGINT AUTO_INCREMENT PRIMARY KEY,admin_id VARCHAR(64),game_id VARCHAR(64),action VARCHAR(128),reason VARCHAR(256),details JSON,created_at BIGINT);

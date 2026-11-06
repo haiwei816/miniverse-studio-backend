@@ -1,0 +1,46 @@
+
+Running s0
+S0 HTTP health, readiness, request IDs, 100 concurrent requests: PASS
+
+Running s1
+S1 identity ownership, credentials, game scope, logout: PASS
+
+Running s1-isolation
+S1 multi-game profile isolation: PASS
+
+Running s1-expiry
+mysql: [Warning] Using a password on the command line interface can be insecure.
+S1 expired token: PASS
+
+Running s3
+S3 concurrent optimistic locking, ownership, gzip/checksum, tombstone and restore: PASS
+
+Running s4
+S4 event dedupe/trust, bounded progress, cumulative/daily/signin/milestone: PASS
+
+Running s5
+S5 automatic reward mail, idempotent recovery/claim, authority inventory: PASS
+
+Running s6
+mysql: [Warning] Using a password on the command line interface can be insecure.
+S6 ranking max/sum/min, duplicate score, nearby rank, season cutoff/idempotent settlement: PASS
+
+Running s7
+S7 GM login, read role, game scope, player/grant/save queries: PASS
+
+Running s8
+S8 approval separation, request idempotency, cancellation, publish/rollback/stop, failures and audit: PASS
+
+Running s9
+S9 two games share login/save/event/mail/inventory/leaderboard modules, data and GM isolation: PASS
+
+Running s10
+S10 Steam/TapTap sandbox signature, expiry unit tests, replay prevention, account binding/conflict/unbind: PASS; REAL PLATFORM UNVERIFIED
+
+Running s11
+S11 schema/business validation, mock generation/repair/simulation, independent publication approval: PASS; REAL AI UNVERIFIED
+
+Running s12
+S12 C++20 -> gRPC -> Go: golden replay/hash, illegal operation/forged score rejection, verified leaderboard: PASS
+
+All automated HTTP milestone checks passed. Godot/C++ runtime checks are separate.

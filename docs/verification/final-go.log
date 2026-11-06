@@ -1,0 +1,9 @@
+?   	miniverse/backend/cmd/api	[no test files]
+?   	miniverse/backend/cmd/migrate	[no test files]
+?   	miniverse/backend/internal/app	[no test files]
+ok  	miniverse/backend/internal/config	(cached)
+?   	miniverse/backend/internal/database	[no test files]
+ok  	miniverse/backend/internal/httpserver	(cached)
+ok  	miniverse/backend/internal/platformauth	(cached)
+?   	miniverse/backend/internal/rulepb	[no test files]
+ok  	miniverse/backend/internal/service	1.450s

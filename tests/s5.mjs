@@ -1,0 +1,12 @@
+import assert from'node:assert/strict';import{api,login}from'./client.mjs';
+const a=await login(),b=await login(),t=a.access_token,base='/v1/games/sky-island',id='reward-'+Date.now();
+await api(base+'/activities','PUT',{id,version:1,kind:'milestone',event_type:id,target:1,starts_at:1,ends_at:4102444800,client_allowed:true,item:'wood',reward_amount:10},t);
+await api(base+'/events','POST',{event_id:'complete',event_type:id,amount:1},t);
+await Promise.all(Array.from({length:8},()=>api(base+`/activities/${id}/reward`,'POST',{},t)));
+const mails=await api(base+'/mail','GET',undefined,t);assert.equal(mails.length,1);const mail=mails[0];
+await api(base+`/mail/${mail.id}/claim`,'POST',{},b.access_token,404);
+await Promise.all(Array.from({length:8},()=>api(base+`/mail/${mail.id}/claim`,'POST',{},t)));
+assert.equal((await api(base+'/inventory','GET',undefined,t)).wood,10);
+await api(base+'/events','POST',{event_id:'complete',event_type:id,amount:1},t);
+assert.equal((await api(base+'/mail','GET',undefined,t)).length,1);
+console.log('S5 automatic reward mail, idempotent recovery/claim, authority inventory: PASS');

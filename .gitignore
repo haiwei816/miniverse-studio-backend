@@ -4,3 +4,8 @@
 /bin/
 *.test
 coverage.out
+node_modules/
+admin/web/dist/
+.godot/
+*.log
+/work/
