@@ -102,3 +102,11 @@ Tests are recorded only after execution. Sandbox results do not certify producti
 - All migrations applied on first startup; full tests/e2e.mjs S0–S12 suite passed, including failed-operation diagnostics.
 - Migration repeat no-op and modified-file rejection also passed against that fresh database.
 - Source logs retained: final-go.log, final-e2e.log, clean-e2e.log and clean-migrations.log. The clean test containers were stopped without deleting data volumes.
+
+## Memory / architecture follow-up — 2026-11-06
+- Found and fixed unbounded per-source limiter growth; hard bound 10000 plus periodic lazy expiry. Concurrent/race and expiry tests passed.
+- Replaced whole-season Go slices with bounded database rank windows: Top50, nearby5, settlement Top3. A 20001-entry board verified exact tie ranking and only three settlement grants.
+- Short local integration sample (2530 profile reads, 280 real gRPC calls): post-GC heap 1159120 -> 1101488 bytes; goroutines 4 -> 4; file descriptors 8 -> 8; DB in-use 0 throughout.
+- Pure C++ rules: 200000 valid + 200000 invalid replays under ASan/LSan/UBSan, exit0 without diagnostics. Godot100 request/client create/free cycles returned nodes/orphans to baseline.
+- This supersedes the earlier full-season materialization limitation for Go application memory. Database sorting costs, data retention and long-duration soak coverage remain open.
+- Screenshot-based feature mapping and remaining production requirements: MEMORY_ARCHITECTURE_REVIEW.md. Only the visible Customer Service menu was confirmed; other top-level pages were not inspected.

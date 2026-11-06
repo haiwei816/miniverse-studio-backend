@@ -23,12 +23,12 @@ type Rank struct {
 	Rank    int    `json:"rank"`
 }
 
-func ranks(r *http.Request, tx *sql.Tx, g, id, season, mode string) ([]Rank, error) {
+func ranks(r *http.Request, tx *sql.Tx, g, id, season, mode string, first, last int) ([]Rank, error) {
 	order := "DESC"
 	if mode == "min" {
 		order = "ASC"
 	}
-	rows, e := tx.QueryContext(r.Context(), "SELECT player_id,score,reached_at FROM scores WHERE game_id=? AND board_id=? AND season=? ORDER BY score "+order+",reached_at ASC,player_id ASC", g, id, season)
+	rows, e := tx.QueryContext(r.Context(), "WITH ranked AS (SELECT player_id,score,reached_at,ROW_NUMBER() OVER (ORDER BY score "+order+",reached_at ASC,player_id ASC) AS place FROM scores WHERE game_id=? AND board_id=? AND season=?) SELECT player_id,score,reached_at,place FROM ranked WHERE place BETWEEN ? AND ? ORDER BY place", g, id, season, first, last)
 	if e != nil {
 		return nil, e
 	}
@@ -36,10 +36,9 @@ func ranks(r *http.Request, tx *sql.Tx, g, id, season, mode string) ([]Rank, err
 	a := []Rank{}
 	for rows.Next() {
 		var v Rank
-		if e = rows.Scan(&v.Player, &v.Score, &v.Reached); e != nil {
+		if e = rows.Scan(&v.Player, &v.Score, &v.Reached, &v.Rank); e != nil {
 			return nil, e
 		}
-		v.Rank = len(a) + 1
 		a = append(a, v)
 	}
 	return a, rows.Err()
@@ -145,20 +144,28 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 			if e := tx.QueryRowContext(r.Context(), "SELECT mode FROM boards WHERE game_id=? AND id=? AND season=?", g, r.PathValue("board"), r.PathValue("season")).Scan(&mode); e != nil {
 				return bad(404, "board_not_found")
 			}
-			a, e := ranks(r, tx, g, r.PathValue("board"), r.PathValue("season"), mode)
+			top, e := ranks(r, tx, g, r.PathValue("board"), r.PathValue("season"), mode, 1, 50)
 			if e != nil {
 				return e
 			}
-			top := a
-			if len(top) > 50 {
-				top = top[:50]
-			}
 			near := []Rank{}
-			for i, v := range a {
-				if v.Player == p {
-					lo, hi := max(0, i-2), min(len(a), i+3)
-					near = a[lo:hi]
-					break
+			var score, reached int64
+			e = tx.QueryRowContext(r.Context(), "SELECT score,reached_at FROM scores WHERE game_id=? AND board_id=? AND season=? AND player_id=?", g, r.PathValue("board"), r.PathValue("season"), p).Scan(&score, &reached)
+			if e != nil && e != sql.ErrNoRows {
+				return e
+			}
+			if e == nil {
+				op := ">"
+				if mode == "min" {
+					op = "<"
+				}
+				var better int
+				if e = tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM scores WHERE game_id=? AND board_id=? AND season=? AND (score "+op+" ? OR (score=? AND reached_at<?) OR (score=? AND reached_at=? AND player_id<?))", g, r.PathValue("board"), r.PathValue("season"), score, score, reached, score, reached, p).Scan(&better); e != nil {
+					return e
+				}
+				near, e = ranks(r, tx, g, r.PathValue("board"), r.PathValue("season"), mode, max(1, better-1), better+3)
+				if e != nil {
+					return e
 				}
 			}
 			trust := "client_unverified"
@@ -196,7 +203,7 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 			if time.Now().Unix() < end {
 				return bad(409, "season_still_open")
 			}
-			a, e := ranks(r, tx, g, id, season, mode)
+			a, e := ranks(r, tx, g, id, season, mode, 1, 3)
 			if e != nil {
 				return e
 			}

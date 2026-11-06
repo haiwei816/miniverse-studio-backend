@@ -19,10 +19,11 @@ import (
 )
 
 type Service struct {
-	DB      *sql.DB
-	Sandbox bool
-	mu      sync.Mutex
-	limits  map[string]bucket
+	DB             *sql.DB
+	Sandbox        bool
+	mu             sync.Mutex
+	limits         map[string]bucket
+	nextLimitSweep time.Time
 }
 type bucket struct {
 	start time.Time
@@ -67,23 +68,8 @@ func (s *Service) handle(m *http.ServeMux, path string, f endpoint) {
 		defer cancel()
 		r = r.WithContext(ctx)
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		s.mu.Lock()
-		b := s.limits[host]
-		if time.Since(b.start) > time.Minute {
-			b = bucket{start: time.Now()}
-		}
-		b.n++
-		s.limits[host] = b
-		if len(s.limits) > 10000 {
-			for k, v := range s.limits {
-				if time.Since(v.start) > time.Minute {
-					delete(s.limits, k)
-				}
-			}
-		}
-		s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if b.n > 600 {
+		if !s.allowRequest(host, time.Now()) {
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(429)
 			json.NewEncoder(w).Encode(map[string]string{"error": "rate_limited"})

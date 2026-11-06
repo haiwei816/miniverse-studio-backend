@@ -102,6 +102,7 @@ GM 开发：`cd admin/web && npm ci && npm run dev`，访问 localhost:5173；�
 - [C++ 规则与限制](docs/rulecore.md)
 - [备份、恢复与迁移](docs/operations.md)
 - [真实验收与限制](docs/verification/RESULTS.md)
+- [内存检查与参考后台功能评估](docs/verification/MEMORY_ARCHITECTURE_REVIEW.md)
 - [交给其他 AI Coding Agent 的总控 Prompt](docs/MASTER_IMPLEMENTATION_PROMPT.md)
 
 首版未包含多人 3D 大厅、实时 PvP、通用分发、支付或跨游戏经济。正式发布前仍需要真实渠道/AI 适配、服务器签发对局上下文、生产凭据和权限管理、备份恢复演练、TLS 与部署验证。

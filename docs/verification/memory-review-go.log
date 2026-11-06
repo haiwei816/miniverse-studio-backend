@@ -1,0 +1,47 @@
+?   	miniverse/backend/cmd/api	[no test files]
+?   	miniverse/backend/cmd/migrate	[no test files]
+?   	miniverse/backend/internal/app	[no test files]
+ok  	miniverse/backend/internal/config	1.023s
+?   	miniverse/backend/internal/database	[no test files]
+ok  	miniverse/backend/internal/httpserver	1.068s
+ok  	miniverse/backend/internal/platformauth	1.023s
+?   	miniverse/backend/internal/rulepb	[no test files]
+ok  	miniverse/backend/internal/service	1.218s
+File: service.test
+Build ID: 802056cfe5f734503591d46e98f85131e87d07b8
+Type: inuse_space
+Time: 2026-11-06 12:38:43 UTC
+Showing nodes accounting for 2049.19kB, 100% of 2049.19kB total
+      flat  flat%   sum%        cum   cum%
+ 1024.11kB 49.98% 49.98%  1024.11kB 49.98%  github.com/go-sql-driver/mysql.(*mysqlConn).startWatcher.func1
+     513kB 25.03% 75.01%      513kB 25.03%  runtime.mallocgc
+  512.08kB 24.99%   100%   512.08kB 24.99%  internal/sync.newIndirectNode[go.shape.interface {},go.shape.interface {}] (inline)
+         0     0%   100%   512.08kB 24.99%  encoding/json.Unmarshal (inline)
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.Unmarshal
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.makeStructArshaler.func1
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.makeStructArshaler.func3
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.makeStructFields
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.makeStructFields.func3
+         0     0%   100%   512.08kB 24.99%  encoding/json/v2.unmarshalDecode
+         0     0%   100%   512.08kB 24.99%  google.golang.org/grpc.init.0
+         0     0%   100%   512.08kB 24.99%  google.golang.org/grpc.parseServiceConfig
+         0     0%   100%   512.08kB 24.99%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).LoadOrStore
+         0     0%   100%   512.08kB 24.99%  internal/sync.(*HashTrieMap[go.shape.interface {},go.shape.interface {}]).expand
+         0     0%   100%   512.08kB 24.99%  reflect.(*rtype).ptrTo
+         0     0%   100%   512.08kB 24.99%  reflect.PointerTo (inline)
+         0     0%   100%      513kB 25.03%  runtime.allocm
+         0     0%   100%   512.08kB 24.99%  runtime.doInit (inline)
+         0     0%   100%   512.08kB 24.99%  runtime.doInit1
+         0     0%   100%   512.08kB 24.99%  runtime.main
+         0     0%   100%      513kB 25.03%  runtime.mstart
+         0     0%   100%      513kB 25.03%  runtime.mstart0
+         0     0%   100%      513kB 25.03%  runtime.mstart1
+         0     0%   100%      513kB 25.03%  runtime.newm
+         0     0%   100%      513kB 25.03%  runtime.newobject
+         0     0%   100%      513kB 25.03%  runtime.resetspinning
+         0     0%   100%      513kB 25.03%  runtime.schedule
+         0     0%   100%      513kB 25.03%  runtime.startm
+         0     0%   100%      513kB 25.03%  runtime.wakep
+         0     0%   100%   512.08kB 24.99%  sync.(*Map).LoadOrStore (inline)
+         0     0%   100%   512.08kB 24.99%  sync.(*Once).Do
+         0     0%   100%   512.08kB 24.99%  sync.(*Once).doSlow
