@@ -1,0 +1,18 @@
+/* Self-hosted so the console never waits on a CDN and renders identically
+   behind the docker network. Inter covers UI text; Newsreader carries the
+   editorial serif headings that give the console its Claude-like voice. */
+@font-face {
+  font-family: "Inter";
+  src: url("../assets/fonts/inter-var.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Newsreader";
+  src: url("../assets/fonts/newsreader-var.woff2") format("woff2-variations");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}

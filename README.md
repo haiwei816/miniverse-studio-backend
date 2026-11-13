@@ -86,6 +86,16 @@ docker run --rm --entrypoint /build/rule_tests miniverse-rulecore:local
 
 GM 开发：`cd admin/web && npm ci && npm run dev`，访问 localhost:5173；生产资源检查用 `npm run build`。CI 已配置 Go、前端审计/构建、Compose、HTTP、恢复和 Godot 测试；**远程 GitHub Actions 尚未运行**。
 
+GM 桌面客户端（Tauri 2，复用同一套 Vue 界面）：
+
+```sh
+cd admin/web
+npm run desktop        # 开发：原生窗口 + 热键 + 托盘
+npm run desktop:build  # 打包：src-tauri/target/release/bundle/
+```
+
+需要 Rust 工具链与 MSVC 生成工具，`npx tauri info` 会逐项报告缺什么；托盘、全局热键（`Ctrl/Cmd+Shift+G`）、系统通知与接口地址配置见 [桌面客户端](docs/desktop.md)。
+
 ## 目录与关键约束
 
 `backend/cmd` 负责 API/独立迁移；`internal/service` 按身份、存档、活动、奖励、排行、GM、渠道与策划划分文件；`internal/platformauth` 封装凭证验证；`internal/rulepb` 是生成的协议。普通模块同进程共享事务，C++ 仅按需调用。
@@ -100,6 +110,7 @@ GM 开发：`cd admin/web && npm ci && npm run dev`，访问 localhost:5173；�
 - [接口契约](docs/api.md)
 - [邮件与背包库存、消耗和流水](docs/mail-inventory.md)
 - [本地开发](docs/local-development.md)
+- [桌面客户端（Tauri）](docs/desktop.md)
 - [第二游戏接入](docs/new-game.md)
 - [纯客户端接入指南与存档迁移](docs/client-only-integration.md)
 - [渠道适配状态](docs/platform-adapters.md)

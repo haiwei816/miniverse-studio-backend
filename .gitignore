@@ -9,3 +9,5 @@ admin/web/dist/
 .godot/
 *.log
 /work/
+admin/web/src-tauri/target/
+admin/web/src-tauri/gen/

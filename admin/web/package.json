@@ -1,1 +1,21 @@
-{"name":"miniverse-gm","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build"},"dependencies":{"element-plus":"2.11.5","vue":"3.5.45"},"devDependencies":{"vite":"7.3.7"}}
+{
+  "name": "miniverse-gm",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "build:desktop": "vite build --base=./",
+    "preview": "vite preview --host 127.0.0.1",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build"
+  },
+  "dependencies": {
+    "vue": "3.5.45"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "vite": "7.3.7"
+  }
+}
