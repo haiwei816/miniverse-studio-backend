@@ -97,11 +97,8 @@ func (s *Service) actor(r *http.Request) (string, error) {
 		return "", bad(401, "unauthorized")
 	}
 	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !s.Sandbox {
-		t = "production:" + t
-	}
 	var id string
-	e := s.DB.QueryRowContext(r.Context(), "SELECT player_id FROM sessions WHERE token_hash=? AND expires_at>?", hash(t), time.Now().Unix()).Scan(&id)
+	e := s.DB.QueryRowContext(r.Context(), "SELECT player_id FROM sessions WHERE token_hash=? AND expires_at>?", s.sessionHash(t), time.Now().Unix()).Scan(&id)
 	if e != nil {
 		return "", bad(401, "unauthorized")
 	}
@@ -124,6 +121,8 @@ func (s *Service) Routes(m *http.ServeMux) {
 	s.savesRoutes(m)
 	s.activitiesRoutes(m)
 	s.rewardRoutes(m)
+	s.mailRoutes(m)
+	s.inventoryRoutes(m)
 	s.boardRoutes(m)
 	s.gmRoutes(m)
 	s.operationsRoutes(m)

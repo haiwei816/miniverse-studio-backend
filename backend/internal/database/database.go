@@ -21,7 +21,7 @@ func Ready(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	var n int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version=12").Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version=13").Scan(&n); err != nil {
 		return err
 	}
 	if n != 1 {

@@ -124,7 +124,13 @@ func (s *Service) gmRoutes(m *http.ServeMux) {
 			return nil, bad(404, "player_not_found")
 		}
 		out := map[string]any{"player_id": p, "name": name}
-		for key, query := range map[string]string{"saves": "SELECT slot,revision,schema_version,deleted FROM saves WHERE game_id=? AND player_id=?", "grants": "SELECT id,business_key,item,amount FROM grants WHERE game_id=? AND player_id=?"} {
+		for key, query := range map[string]string{
+			"saves":            "SELECT slot,revision,schema_version,deleted FROM saves WHERE game_id=? AND player_id=?",
+			"grants":           "SELECT id,business_key,item,amount FROM grants WHERE game_id=? AND player_id=?",
+			"inventory":        "SELECT item,amount FROM inventory WHERE game_id=? AND player_id=? ORDER BY item",
+			"inventory_ledger": "SELECT id,item,delta,balance,reason,business_key,created_at FROM inventory_ledger WHERE game_id=? AND player_id=? ORDER BY id DESC LIMIT 50",
+			"mail":             "SELECT m.id,m.title,m.claimed,COALESCE(st.read_at,0)>0 AS is_read,COALESCE(st.deleted_at,0)>0 AS deleted,m.expires_at FROM mail m LEFT JOIN mail_states st ON st.mail_id=m.id WHERE m.game_id=? AND m.player_id=? ORDER BY m.expires_at DESC,m.id LIMIT 100",
+		} {
 			rows, e := s.DB.QueryContext(r.Context(), query, a.Game, p)
 			if e != nil {
 				return nil, e

@@ -67,14 +67,14 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 		}
 		token := random()
 		exp := time.Now().Add(time.Hour).Unix()
-		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", hash(token), id, exp)
+		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", s.sessionHash(token), id, exp)
 		return map[string]any{"player_id": id, "secret": secret, "access_token": token, "expires_at": exp, "adapter": "sandbox"}, e
 	})
 	s.handle(m, "POST /v1/auth/logout", func(r *http.Request) (any, error) {
 		if _, e := s.actor(r); e != nil {
 			return nil, e
 		}
-		_, e := s.DB.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash=?", hash(r.Header.Get("Authorization")[7:]))
+		_, e := s.DB.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash=?", s.sessionHash(r.Header.Get("Authorization")[7:]))
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /v1/games/{game}/profile", func(r *http.Request) (any, error) {

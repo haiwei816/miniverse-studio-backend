@@ -103,7 +103,7 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 						return e
 					}
 				}
-				_, e = tx.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", hash(token), player, time.Now().Add(time.Hour).Unix())
+				_, e = tx.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", s.sessionHash(token), player, time.Now().Add(time.Hour).Unix())
 				return e
 			})
 			return map[string]any{"player_id": player, "access_token": token, "adapter": "sandbox", "real_platform": "unverified"}, e

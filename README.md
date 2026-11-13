@@ -38,6 +38,8 @@ sandbox 管理员账号：
 
 ## 一次完整体验
 
+已有纯客户端游戏可先运行 `sdk/godot/local_bridge_demo.tscn`：离线游玩并保留原存档，需要时再登录、预览及首次导入云端。已有云存档会要求选择版本。详见 [纯客户端接入指南](docs/client-only-integration.md)。
+
 1. 用 Godot **4.5.1** 打开 `sdk/godot/project.godot`；运行 `sky_island.tscn` 或 `card_game.tscn`。
 2. 点击“升级建筑”或“完成挑战”，使用统一 SDK 保存进度、上报事件和成绩；达到目标后收到奖励邮件。
 3. 点击领取，显示服务端权威库存；重复领取不会重复入账。断网进度保存在本地，重连可同步，冲突时可选择本地或云端版本。
@@ -96,12 +98,15 @@ GM 开发：`cd admin/web && npm ci && npm run dev`，访问 localhost:5173；�
 
 - [架构与数据流程](docs/architecture.md)
 - [接口契约](docs/api.md)
+- [邮件与背包库存、消耗和流水](docs/mail-inventory.md)
 - [本地开发](docs/local-development.md)
 - [第二游戏接入](docs/new-game.md)
+- [纯客户端接入指南与存档迁移](docs/client-only-integration.md)
 - [渠道适配状态](docs/platform-adapters.md)
 - [C++ 规则与限制](docs/rulecore.md)
 - [备份、恢复与迁移](docs/operations.md)
 - [真实验收与限制](docs/verification/RESULTS.md)
+- [MVP 后续补充与验收清单](docs/mvp-follow-up.md)
 - [内存检查与参考后台功能评估](docs/verification/MEMORY_ARCHITECTURE_REVIEW.md)
 - [交给其他 AI Coding Agent 的总控 Prompt](docs/MASTER_IMPLEMENTATION_PROMPT.md)
 

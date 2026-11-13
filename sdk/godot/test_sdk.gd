@@ -14,8 +14,8 @@ func run() -> void:
 	client.base_url = "http://127.0.0.1:1"
 	var offline := await client.profile()
 	assert(not offline.ok)
-	assert(client.cache_load().offline_progress == 42)
 	client.base_url = original
+	assert(client.cache_load().offline_progress == 42)
 	assert((await client.profile()).ok)
 	assert((await client.logout()).ok)
 	assert(client.access_token.is_empty())

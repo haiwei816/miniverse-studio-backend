@@ -1,5 +1,7 @@
 # 接入新游戏
 
+只有客户端、已有本地存档的游戏先按 [纯客户端接入指南](client-only-integration.md) 接云备份，保留原玩法；不要直接将客户端余额导入线上库存。
+
 1. 用新迁移注册 games、items、活动配置与榜单，以及显式的 gm_access 授权；配置样例见 game-configs。
 2. 同一个 Godot SDK 设置 game_id。游戏只实现本地玩法与自己的存档 schema；使用统一 event、cloud_save、game_request API。
 3. 活动采用该游戏的事件类型与道具 ID，客户端事件只用于明确允许的休闲活动。贵重奖励与可信排行必须验证来源。

@@ -13,6 +13,8 @@ jobs:
       - run: cd admin/web && npm ci && npm audit --audit-level=high && npm run build
       - run: docker compose -f deploy/compose.yaml --profile rules --profile gm up -d --build
       - run: node tests/e2e.mjs
+      - run: node tests/mail-inventory.mjs
+      - run: node tests/mail-inventory-upgrade.mjs
       - run: node tests/migrations.mjs && node tests/production-boundary.mjs
       - run: node tests/recovery.mjs
       - run: |
@@ -21,6 +23,8 @@ jobs:
           /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --editor --import --quit
           /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_sdk.gd
           /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_saves.gd
+          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_local_bridge.gd
+          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_mail_inventory.gd
       - uses: actions/upload-artifact@v4
         if: always()
         with: {name: verification, path: docs/verification/}

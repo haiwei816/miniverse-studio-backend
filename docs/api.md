@@ -21,9 +21,15 @@ JSON 请求使用 Content-Type: application/json。会话通过 Authorization: B
 | GET /v1/games/{game}/activities | 活动配置、自己的进度和完成状态 |
 | POST /v1/games/{game}/events | event_id、event_type、amount；来源由服务端固定为 client |
 | POST /v1/games/{game}/activities/{activity}/reward | 对已完成活动补建幂等奖励；正常事件完成会自动生成 |
-| GET /v1/games/{game}/mail | 附件、过期、领取状态与历史；最近 200 封 |
+| GET /v1/games/{game}/mail | 附件、过期、领取、read 状态；未删除的最近 200 封，支持 filter=all/unread/unclaimed 与 limit |
 | POST /v1/games/{game}/mail/{mail}/claim | 邮件领取与权威库存入账同一事务；重复返回成功 |
+| POST /v1/games/{game}/mail/{mail}/read | 标记已读，不领取附件 |
+| DELETE /v1/games/{game}/mail/{mail} | 软删除；有效未领附件返回409，过期或已领可删除 |
+| POST /v1/games/{game}/mail/claim-all | 原子领取最多100封，返回 claimed、count、has_more |
 | GET /v1/games/{game}/inventory | 分游戏的服务端权威道具余额 |
+| GET /v1/games/{game}/items | 道具目录和自身数量，after/limit 游标分页 |
+| POST /v1/games/{game}/inventory/consume | request_id、item、amount；幂等扣除自身库存，参数冲突/余额不足返回409 |
+| GET /v1/games/{game}/inventory/ledger | 增减流水，before/limit 游标分页 |
 | PUT /v1/games/{game}/boards | sandbox 榜单配置：id、season、mode=max/sum/min、时间窗、奖励 |
 | GET /v1/games/{game}/boards/{board}/{season} | Top50、自己附近五名和 trust 标记 |
 | POST /v1/games/{game}/boards/{board}/{season}/scores | request_id、score；普通休闲榜，可信榜拒绝该入口 |
@@ -40,7 +46,7 @@ GM token 和玩家 token 完全分离。POST /gm/login 接受 username、passwor
 | GM 路径（前缀 /gm/games/{game}） | 行为 |
 |---|---|
 | GET /players?q= | 按 UID/名称查询，最多 100 条 |
-| GET /players/{player} | 档案、存档槽版本、奖励流水 |
+| GET /players/{player} | 档案、存档槽版本、奖励流水、库存、最近50条库存流水和最近100封邮件（含删除状态） |
 | GET /audit | 最近 200 条管理写操作审计 |
 | GET /failures | 授权游戏的失败管理操作和非法分数/回放异常；不记录凭据或请求正文 |
 | POST /requests | id、kind=reward/activity、reason、payload；稳定 id 防重复，变更 payload 返回409 |
@@ -61,3 +67,5 @@ GM token 和玩家 token 完全分离。POST /gm/login 接受 username、passwor
 活动事件、进度、自动发奖在同一事务内，不存在另一个不可靠的异步投递步骤。稳定业务键约束邮件唯一，领取锁保护服务器库存。云存档不能成为权威货币来源。重放校验只证明规则一致性；mock 渠道不证明外部用户身份；mock 生成率不代表真实 AI 能力。
 
 测试脚本既是可执行用例，也提供请求示例：tests/s1.mjs 到 tests/s12.mjs。
+
+邮件/背包的重试约定、期初流水、停写升级和 Godot 示例详见 [邮件与背包库存](mail-inventory.md)。
