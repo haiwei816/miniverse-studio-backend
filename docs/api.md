@@ -41,10 +41,11 @@ JSON 请求使用 Content-Type: application/json。会话通过 Authorization: B
 
 ## GM 会话与授权
 
-GM token 和玩家 token 完全分离。POST /gm/login 接受 username、password。所有 `/gm/games/{game}` 接口核对管理员角色与 gm_access；support 只读，operator 创建申请，reviewer 审批，admin 可做两类操作但不能批准自己的申请。会话三十分钟过期。
+GM token 和玩家 token 完全分离。POST /gm/login 接受 username、password；GET /gm/games 返回当前管理员已授权的活跃游戏列表。所有 `/gm/games/{game}` 接口核对管理员角色与 gm_access；support 只读，operator 创建申请，reviewer 审批，admin 可做两类操作但不能批准自己的申请。会话三十分钟过期。
 
 | GM 路径（前缀 /gm/games/{game}） | 行为 |
 |---|---|
+| GET /overview | 看板统计：玩家、在线、存档、待领邮件、活跃活动、有余额道具、待审申请、24h 审计/失败/发奖，以及 7 天（UTC 分桶）审计与发奖序列；全部为服务端计数 |
 | GET /players?q= | 按 UID/名称查询，最多 100 条 |
 | GET /players/{player} | 档案、存档槽版本、奖励流水、库存、最近50条库存流水和最近100封邮件（含删除状态） |
 | GET /audit | 最近 200 条管理写操作审计 |

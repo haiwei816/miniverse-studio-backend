@@ -37,15 +37,26 @@ func (s *Service) seedGM() error {
 
 type GM struct{ ID, Role, Game string }
 
-func (s *Service) gm(r *http.Request, permission string) (GM, error) {
+func (s *Service) gmSession(r *http.Request) (GM, error) {
 	var a GM
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return a, bad(401, "gm_unauthorized")
+	}
 	var salt string
-	e := s.DB.QueryRowContext(r.Context(), "SELECT a.id,a.role,a.salt FROM gm_sessions s JOIN admins a ON a.id=s.admin_id WHERE s.token_hash=? AND s.expires_at>?", hash(r.Header.Get("Authorization")), time.Now().Unix()).Scan(&a.ID, &a.Role, &salt)
+	e := s.DB.QueryRowContext(r.Context(), "SELECT a.id,a.role,a.salt FROM gm_sessions s JOIN admins a ON a.id=s.admin_id WHERE s.token_hash=? AND s.expires_at>?", hash(auth), time.Now().Unix()).Scan(&a.ID, &a.Role, &salt)
 	if e != nil {
 		return a, bad(401, "gm_unauthorized")
 	}
 	if !s.Sandbox && strings.HasPrefix(salt, "sandbox-fixture-") {
 		return a, bad(403, "sandbox_admin_disabled")
+	}
+	return a, nil
+}
+func (s *Service) gm(r *http.Request, permission string) (GM, error) {
+	a, e := s.gmSession(r)
+	if e != nil {
+		return a, e
 	}
 	a.Game = r.PathValue("game")
 	var n int
@@ -91,6 +102,26 @@ func (s *Service) gmRoutes(m *http.ServeMux) {
 		token := random()
 		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO gm_sessions VALUES(?,?,?)", hash("Bearer "+token), b.Username, time.Now().Add(30*time.Minute).Unix())
 		return map[string]any{"access_token": token, "role": role, "username": b.Username}, e
+	})
+	s.handle(m, "GET /gm/games", func(r *http.Request) (any, error) {
+		a, e := s.gmSession(r)
+		if e != nil {
+			return nil, e
+		}
+		rows, e := s.DB.QueryContext(r.Context(), "SELECT g.id,g.name FROM games g JOIN gm_access a ON a.game_id=g.id WHERE a.admin_id=? AND g.active=TRUE ORDER BY g.id", a.ID)
+		if e != nil {
+			return nil, e
+		}
+		defer rows.Close()
+		out := []any{}
+		for rows.Next() {
+			var id, name string
+			if e = rows.Scan(&id, &name); e != nil {
+				return nil, e
+			}
+			out = append(out, map[string]string{"game_id": id, "name": name})
+		}
+		return out, rows.Err()
 	})
 	s.handle(m, "GET /gm/games/{game}/players", func(r *http.Request) (any, error) {
 		a, e := s.gm(r, "read")

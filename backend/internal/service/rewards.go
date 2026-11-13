@@ -34,7 +34,7 @@ func (s *Service) rewardRoutes(m *http.ServeMux) {
 		}
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
 			var raw []byte
-			if e := tx.QueryRowContext(r.Context(), "SELECT config FROM activities WHERE game_id=? AND id=?", g, r.PathValue("activity")).Scan(&raw); e != nil {
+			if e := tx.QueryRowContext(r.Context(), "SELECT config FROM activities WHERE game_id=? AND id=? AND active=TRUE", g, r.PathValue("activity")).Scan(&raw); e != nil {
 				return bad(404, "activity_not_found")
 			}
 			a, e := readActivity(raw)

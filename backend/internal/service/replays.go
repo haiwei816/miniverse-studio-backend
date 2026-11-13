@@ -13,6 +13,24 @@ import (
 	"time"
 )
 
+func (s *Service) ruleClient(address string) (rulepb.RuleCoreClient, error) {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	if s.ruleConn != nil && s.ruleAddr == address {
+		return rulepb.NewRuleCoreClient(s.ruleConn), nil
+	}
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	if s.ruleConn != nil {
+		_ = s.ruleConn.Close()
+	}
+	s.ruleConn = conn
+	s.ruleAddr = address
+	return rulepb.NewRuleCoreClient(conn), nil
+}
+
 func (s *Service) replayRoutes(m *http.ServeMux) {
 	s.handle(m, "POST /v1/games/{game}/replays/validate", func(r *http.Request) (any, error) {
 		g, p, e := s.scope(r)
@@ -38,14 +56,13 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 		if address == "" {
 			address = "rulecore:50051"
 		}
-		conn, e := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		client, e := s.ruleClient(address)
 		if e != nil {
 			return nil, bad(503, "rulecore_unavailable")
 		}
-		defer conn.Close()
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		out, e := rulepb.NewRuleCoreClient(conn).Replay(ctx, &rulepb.ReplayRequest{Version: b.Version, Seed: b.Seed, Actions: b.Actions})
+		out, e := client.Replay(ctx, &rulepb.ReplayRequest{Version: b.Version, Seed: b.Seed, Actions: b.Actions})
 		if e != nil {
 			return nil, bad(503, "rulecore_unavailable")
 		}

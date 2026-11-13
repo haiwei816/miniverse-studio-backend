@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -53,5 +54,28 @@ func TestLimiterConcurrentSources(t *testing.T) {
 	wg.Wait()
 	if len(s.limits) > maxLimitEntries {
 		t.Fatal("unbounded concurrent growth")
+	}
+}
+
+func TestClientIPTrustedProxyHandling(t *testing.T) {
+	direct := httptest.NewRequest("GET", "/", nil)
+	direct.RemoteAddr = "198.51.100.10:12345"
+	direct.Header.Set("X-Forwarded-For", "203.0.113.9")
+	if got := clientIP(direct); got != "198.51.100.10" {
+		t.Fatalf("untrusted proxy header accepted: got %s", got)
+	}
+
+	proxied := httptest.NewRequest("GET", "/", nil)
+	proxied.RemoteAddr = "172.18.0.5:54321"
+	proxied.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.20")
+	if got := clientIP(proxied); got != "198.51.100.20" {
+		t.Fatalf("expected rightmost client IP from trusted proxy, got %s", got)
+	}
+
+	realIP := httptest.NewRequest("GET", "/", nil)
+	realIP.RemoteAddr = "127.0.0.1:4321"
+	realIP.Header.Set("X-Real-IP", "203.0.113.42")
+	if got := clientIP(realIP); got != "203.0.113.42" {
+		t.Fatalf("expected X-Real-IP from loopback proxy, got %s", got)
 	}
 }

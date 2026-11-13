@@ -9,9 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/go-sql-driver/mysql"
+	"google.golang.org/grpc"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,7 +24,23 @@ type Service struct {
 	mu             sync.Mutex
 	limits         map[string]bucket
 	nextLimitSweep time.Time
+	ruleMu         sync.Mutex
+	ruleAddr       string
+	ruleConn       *grpc.ClientConn
 }
+
+func (s *Service) Close() error {
+	s.ruleMu.Lock()
+	defer s.ruleMu.Unlock()
+	if s.ruleConn == nil {
+		return nil
+	}
+	err := s.ruleConn.Close()
+	s.ruleConn = nil
+	s.ruleAddr = ""
+	return err
+}
+
 type bucket struct {
 	start time.Time
 	n     int
@@ -67,7 +83,7 @@ func (s *Service) handle(m *http.ServeMux, path string, f endpoint) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		host := clientIP(r)
 		w.Header().Set("Content-Type", "application/json")
 		if !s.allowRequest(host, time.Now()) {
 			w.Header().Set("Retry-After", "60")
@@ -125,6 +141,7 @@ func (s *Service) Routes(m *http.ServeMux) {
 	s.inventoryRoutes(m)
 	s.boardRoutes(m)
 	s.gmRoutes(m)
+	s.overviewRoutes(m)
 	s.operationsRoutes(m)
 	s.platformRoutes(m)
 	s.plannerRoutes(m)

@@ -7,6 +7,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+const ExpectedSchemaVersion = 13
+
 func Open(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -21,7 +23,7 @@ func Ready(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	var n int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version=13").Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version=?", ExpectedSchemaVersion).Scan(&n); err != nil {
 		return err
 	}
 	if n != 1 {

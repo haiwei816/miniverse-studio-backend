@@ -107,7 +107,7 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
-		rows, e := s.DB.QueryContext(r.Context(), "SELECT id,kind,creator,reviewer,state,reason,payload FROM gm_requests WHERE game_id=? ORDER BY created_at DESC,id LIMIT 200", a.Game)
+		rows, e := s.DB.QueryContext(r.Context(), "SELECT id,kind,creator,COALESCE(reviewer,''),state,reason,payload FROM gm_requests WHERE game_id=? ORDER BY created_at DESC,id LIMIT 200", a.Game)
 		if e != nil {
 			return nil, e
 		}

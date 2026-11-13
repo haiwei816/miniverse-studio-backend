@@ -125,6 +125,9 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
+		if !s.Sandbox {
+			return nil, bad(503, "real_provider_not_configured")
+		}
 		v, e := a.Verify(r.Context(), b.Game, b.Ticket)
 		if e != nil {
 			return nil, bad(401, "invalid_platform_proof")

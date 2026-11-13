@@ -36,6 +36,7 @@ func Run(cfg config.Config) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", router)
 	svc := service.New(db, os.Getenv("APP_ENV") == "sandbox")
+	defer svc.Close()
 	if err := svc.Initialize(); err != nil {
 		return err
 	}
@@ -43,11 +44,13 @@ func Run(cfg config.Config) error {
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 		defer cancel()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if database.Ready(ctx, db) != nil {
-			http.Error(w, `{"error":"not_ready"}`, 503)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"not_ready"}`))
 			return
 		}
-		w.Write([]byte(`{"status":"ready"}`))
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
 	server := &http.Server{Handler: httpserver.Logging(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

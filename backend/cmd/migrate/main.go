@@ -60,11 +60,9 @@ func main() {
 		if e != sql.ErrNoRows {
 			log.Fatal("migration status failed")
 		}
-		for _, q := range strings.Split(string(b), ";") {
-			if strings.TrimSpace(q) != "" {
-				if _, e = conn.ExecContext(ctx, q); e != nil {
-					log.Fatal("migration failed: ", name, ": ", e)
-				}
+		for _, q := range splitSQL(string(b)) {
+			if _, e = conn.ExecContext(ctx, q); e != nil {
+				log.Fatal("migration failed: ", name, ": ", e)
 			}
 		}
 		version, e := strconv.Atoi(strings.SplitN(name, "_", 2)[0])
@@ -79,4 +77,81 @@ func main() {
 		}
 		log.Print("applied ", name)
 	}
+}
+
+// splitSQL splits migration scripts on top-level semicolons while ignoring
+// semicolons inside quotes or SQL comments.
+func splitSQL(input string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote byte
+	inLineComment := false
+	inBlockComment := false
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+		if inLineComment {
+			cur.WriteByte(c)
+			if c == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			cur.WriteByte(c)
+			if c == '*' && i+1 < len(input) && input[i+1] == '/' {
+				cur.WriteByte('/')
+				i++
+				inBlockComment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			cur.WriteByte(c)
+			if c == '\\' && quote != '`' && i+1 < len(input) {
+				i++
+				cur.WriteByte(input[i])
+				continue
+			}
+			if c == quote {
+				if i+1 < len(input) && input[i+1] == quote {
+					i++
+					cur.WriteByte(input[i])
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		if c == '-' && i+1 < len(input) && input[i+1] == '-' {
+			cur.WriteByte(c)
+			cur.WriteByte('-')
+			i++
+			inLineComment = true
+			continue
+		}
+		if c == '/' && i+1 < len(input) && input[i+1] == '*' {
+			cur.WriteByte(c)
+			cur.WriteByte('*')
+			i++
+			inBlockComment = true
+			continue
+		}
+		if c == '\'' || c == '"' || c == '`' {
+			quote = c
+			cur.WriteByte(c)
+			continue
+		}
+		if c == ';' {
+			if stmt := strings.TrimSpace(cur.String()); stmt != "" {
+				out = append(out, stmt)
+			}
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	if stmt := strings.TrimSpace(cur.String()); stmt != "" {
+		out = append(out, stmt)
+	}
+	return out
 }
