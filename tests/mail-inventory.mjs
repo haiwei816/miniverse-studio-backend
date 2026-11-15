@@ -58,6 +58,27 @@ assert.equal((await api(`${base}/mail/claim-all`, 'POST', {}, token)).count, 0);
 await api(`${base}/mail/${expired}/claim`, 'POST', {}, token, 410);
 await api(`${base}/mail/${expired}`, 'DELETE', undefined, token);
 
+// More than one page with equal timestamps, including deletion of a cursor row.
+const pager = await login();
+const pageIDs = seedMail(pager.player_id, 205, 1, 1);
+const seen = [];
+let mailCursor = '';
+let firstPage = true;
+do {
+  const page = await api(`${base}/mail/page?limit=50${mailCursor ? `&cursor=${encodeURIComponent(mailCursor)}` : ''}`, 'GET', undefined, pager.access_token);
+  assert.ok(page.items.length <= 50);
+  seen.push(...page.items.map(v => v.id));
+  mailCursor = page.next_cursor;
+  if (firstPage) {
+    await api(`${base}/mail/${page.items.at(-1).id}`, 'DELETE', undefined, pager.access_token);
+    firstPage = false;
+  }
+} while (mailCursor);
+assert.equal(seen.length, 205);
+assert.deepEqual(new Set(seen), new Set(pageIDs));
+await api(`${base}/mail/page?cursor=invalid!`, 'GET', undefined, pager.access_token, 400);
+assert.equal((await api(`${base}/mail/page`, 'GET', undefined, b.access_token)).items.length, 0);
+
 const consume = { request_id: randomUUID(), item: 'wood', amount: 7 };
 const replays = await Promise.all(Array.from({ length: 8 }, () =>
   api(`${base}/inventory/consume`, 'POST', consume, token)));

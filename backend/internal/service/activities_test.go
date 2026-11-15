@@ -6,9 +6,14 @@ import (
 )
 
 func TestActivityValidationAndDailyBucket(t *testing.T) {
-	a := Activity{ID: "test", Version: 1, Kind: "daily", Event: "play", Target: 2, Starts: 1, Ends: 3}
+	a := Activity{ID: "test", Version: 1, Kind: "daily", Event: "play", Target: 2, Starts: 1, Ends: 3, Item: "wood", Amount: 1}
 	if e := validateActivity(a); e != nil {
 		t.Fatal(e)
+	}
+	zero := a
+	zero.Amount = 0
+	if validateActivity(zero) == nil {
+		t.Fatal("accepted zero reward")
 	}
 	for _, kind := range []string{"unknown", "", "script"} {
 		b := a

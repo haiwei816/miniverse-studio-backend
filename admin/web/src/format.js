@@ -14,6 +14,18 @@ const ERROR_TEXT = {
   invalid_json: "请求格式不正确",
   trailing_json: "请求里有多余内容",
   game_not_found: "游戏不存在或已停用",
+  independent_review_required: "需要由另一位有审核权限的成员发布",
+  listing_not_submitted: "请先保存并提交草稿，再进行审核",
+  listing_draft_required: "请先保存游戏资料草稿",
+  invalid_draft_hash: "请刷新后重新提交或审核草稿",
+  listing_draft_changed: "草稿已被修改，请刷新并重新核对内容",
+  listing_not_found: "尚未创建游戏发行资料",
+  invalid_listing: "请检查名称、分类、版本和网页入口路径",
+  invalid_listing_accent: "请选择有效的封面主题",
+  invalid_listing_icon: "封面符号需为 1–4 个字符",
+  invalid_companion_level: "请选择有效的伙伴接入等级",
+  probe_invalid_response: "探测接口未返回有效 JSON（请检查代理配置）",
+  not_ready: "数据库或迁移尚未就绪",
 };
 
 export function errorText(code) {
@@ -77,6 +89,10 @@ const ACTIONS = {
   reward_granted: "补发奖励",
   operation_failed: "操作失败",
   player_anomaly: "玩家异常",
+  listing_draft: "更新发行草稿",
+  listing_submit: "提交游戏审核",
+  listing_publish: "发布游戏",
+  listing_unpublish: "下架游戏",
 };
 
 export function actionLabel(action) {
@@ -94,4 +110,28 @@ export function ago(seconds) {
   if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
   if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
   return Math.floor(diff / 86400) + " 天前";
+}
+
+export function healthBadges(health, loading) {
+  if (loading && !health) {
+    return { api: { tone: "info", label: "探测中" }, ready: { tone: "info", label: "探测中" } };
+  }
+  if (!health) {
+    return { api: { tone: "warn", label: "未探测" }, ready: { tone: "warn", label: "未探测" } };
+  }
+  const api =
+    health.apiState === "ok"
+      ? { tone: "ok", label: "在线" }
+      : health.apiState === "offline"
+        ? { tone: "danger", label: "离线" }
+        : { tone: "warn", label: "探测失败" };
+  const ready =
+    health.readyState === "ok"
+      ? { tone: "ok", label: "就绪" }
+      : health.readyState === "unready"
+        ? { tone: "warn", label: "未就绪" }
+        : health.readyState === "offline"
+          ? { tone: "danger", label: "离线" }
+          : { tone: "warn", label: "探测失败" };
+  return { api, ready };
 }

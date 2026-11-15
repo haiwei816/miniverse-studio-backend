@@ -1,12 +1,13 @@
-import { defineComponent, ref, computed, onMounted, watch } from "vue";
-import { request } from "../api.js";
-import { errorText, count, relative, actionLabel, isFailure, requestState, ago } from "../format.js";
+import { defineComponent, ref, computed, watch, onBeforeUnmount } from "vue";
+import { request, probeHealth } from "../api.js";
+import { errorText, count, relative, actionLabel, isFailure, requestState, ago, healthBadges } from "../format.js";
 import { Sparkline, TrendChart } from "../components/charts.js";
 import { Icon } from "../components/icons.js";
-import { notify, SkeletonRows, Empty } from "../components/ui.js";
+import { notify, SkeletonRows, Empty, ErrorBox } from "../components/ui.js";
 
 export const OverviewView = defineComponent({
   name: "OverviewView",
+  components: { Icon, Sparkline, TrendChart, SkeletonRows, Empty, ErrorBox },
   props: { game: String, role: String, tick: Number },
   emits: ["navigate"],
   setup(props, { emit }) {
@@ -14,8 +15,11 @@ export const OverviewView = defineComponent({
     const audits = ref([]);
     const requests = ref([]);
     const health = ref(null);
-    const loading = ref(true);
+    const healthLoading = ref(false);
+    const loading = ref(false);
     const failure = ref("");
+    let generation = 0;
+    let activeAbort = null;
 
     const totals = computed(() => (data.value ? data.value.totals : {}));
     const series = computed(() => (data.value ? data.value.series : { audits: [], grants: [] }));
@@ -28,41 +32,80 @@ export const OverviewView = defineComponent({
       { key: "b", name: "发奖记录", points: series.value.grants || [] },
     ]);
 
+    async function loadHealth() {
+      healthLoading.value = true;
+      try {
+        health.value = await probeHealth();
+      } finally {
+        healthLoading.value = false;
+      }
+    }
+
     async function load() {
+      const targetGame = props.game;
+      const run = ++generation;
+      if (activeAbort) activeAbort.abort();
+      if (!targetGame) {
+        loading.value = false;
+        failure.value = "";
+        data.value = null;
+        audits.value = [];
+        requests.value = [];
+        return;
+      }
+      activeAbort = new AbortController();
       loading.value = true;
       failure.value = "";
+      const healthTask = loadHealth();
       try {
         const [overview, auditRows, requestRows] = await Promise.all([
-          request(`/gm/games/${props.game}/overview`),
-          request(`/gm/games/${props.game}/audit`),
-          request(`/gm/games/${props.game}/requests`),
+          request(`/gm/games/${encodeURIComponent(targetGame)}/overview`, { signal: activeAbort.signal }),
+          request(`/gm/games/${encodeURIComponent(targetGame)}/audit`, { signal: activeAbort.signal }),
+          request(`/gm/games/${encodeURIComponent(targetGame)}/requests`, { signal: activeAbort.signal }),
         ]);
+        if (run !== generation || targetGame !== props.game) return;
         data.value = overview;
         audits.value = (auditRows || []).slice(0, 7);
         requests.value = requestRows || [];
       } catch (e) {
+        if (e && e.name === "AbortError") return;
+        if (run !== generation || targetGame !== props.game) return;
         failure.value = errorText(e.code);
-        if (e.code !== "gm_unauthorized") notify(errorText(e.code), "error");
+        data.value = null;
+        audits.value = [];
+        requests.value = [];
+        if (e.code !== "gm_unauthorized") notify(failure.value, "error");
       } finally {
-        loading.value = false;
+        if (run === generation) loading.value = false;
       }
-      try {
-        const [h, r] = await Promise.all([request("/health"), request("/ready")]);
-        health.value = { alive: !!h, ready: !!r, checked: Date.now() };
-      } catch {
-        health.value = { alive: false, ready: false, checked: Date.now() };
-      }
+      await healthTask;
     }
 
-    onMounted(load);
-    watch([() => props.game, () => props.tick], load);
+    watch(
+      () => props.game,
+      (next, prev) => {
+        if (prev !== undefined && next !== prev) {
+          data.value = null;
+          audits.value = [];
+          requests.value = [];
+          failure.value = "";
+        }
+        load();
+      },
+      { immediate: true },
+    );
+    watch(() => props.tick, load);
+    onBeforeUnmount(() => activeAbort && activeAbort.abort());
 
     const gameLabel = computed(() => (data.value && data.value.game ? data.value.game.name : props.game));
+    const badges = computed(() => healthBadges(health.value, healthLoading.value));
+    const apiBadge = computed(() => badges.value.api);
+    const readyBadge = computed(() => badges.value.ready);
 
     return {
-      data, audits, requests, pending, health, loading, failure,
-      totals, series, auditSeries, grantSeries, chartSeries, gameLabel,
-      count, relative, actionLabel, isFailure, requestState, ago,
+      data, audits, requests, pending, health, healthLoading, loading, failure,
+      totals, series, auditSeries, grantSeries, chartSeries, gameLabel, apiBadge, readyBadge,
+      load, loadHealth, count, relative, actionLabel, isFailure, requestState, ago,
       go: (view) => emit("navigate", view),
     };
   },
@@ -72,7 +115,7 @@ export const OverviewView = defineComponent({
       <article class="card stat">
         <div class="stat-label"><icon name="players" :size="13"/>玩家</div>
         <div class="stat-value">{{ count(totals.players) }}</div>
-        <div class="stat-foot">当前在线 {{ count(totals.online) }} · 存档 {{ count(totals.saves) }}</div>
+        <div class="stat-foot">有效会话玩家 {{ count(totals.online) }} · 存档 {{ count(totals.saves) }}</div>
       </article>
       <article class="card stat" :data-tone="totals.requests_pending ? 'accent' : ''">
         <div class="stat-label"><icon name="operations" :size="13"/>待审申请</div>
@@ -93,7 +136,7 @@ export const OverviewView = defineComponent({
       </article>
     </section>
 
-    <div v-if="failure" class="banner" data-tone="warn"><icon name="alert" :size="14"/>{{ failure }}<button class="link-btn" style="margin-left:auto" @click="load">重试</button></div>
+    <div v-if="failure" class="banner" data-tone="warn" role="alert"><icon name="alert" :size="14"/>读取概览失败：{{ failure }}<button class="link-btn" style="margin-left:auto" @click="load">重试</button></div>
 
     <section class="grid-main">
       <div class="stack">
@@ -110,6 +153,7 @@ export const OverviewView = defineComponent({
           </div>
           <div class="card-body">
             <skeleton-rows v-if="loading && !data" :rows="3" />
+            <error-box v-else-if="failure && !data" :text="failure" @retry="load" />
             <trend-chart v-else :series="chartSeries" />
           </div>
         </article>
@@ -140,6 +184,7 @@ export const OverviewView = defineComponent({
           </div>
           <div class="card-body" style="padding-top:8px">
             <skeleton-rows v-if="loading" :rows="3" />
+            <error-box v-else-if="failure" :text="failure" @retry="load" />
             <empty v-else-if="!pending.length" text="没有待审批的申请" />
             <div v-else class="list">
               <div class="list-row" v-for="row in pending.slice(0,4)" :key="row.id">
@@ -157,6 +202,7 @@ export const OverviewView = defineComponent({
           <div class="card-head"><div class="card-title">最近操作</div><div class="card-note">审计流</div></div>
           <div class="card-body">
             <skeleton-rows v-if="loading" :rows="4" />
+            <error-box v-else-if="failure" :text="failure" @retry="load" />
             <empty v-else-if="!audits.length" text="还没有管理操作" />
             <div v-else class="timeline">
               <div class="timeline-row" v-for="row in audits" :key="row.id">
@@ -171,16 +217,25 @@ export const OverviewView = defineComponent({
         </article>
 
         <article class="card">
-          <div class="card-head"><div class="card-title">服务状态</div><div class="card-note">实时探测</div></div>
+          <div class="card-head">
+            <div class="card-title">服务状态</div>
+            <button type="button" class="link-btn" :disabled="healthLoading" @click="loadHealth">{{ healthLoading ? '探测中…' : '重新探测' }}</button>
+          </div>
           <div class="card-body">
             <div class="list">
               <div class="list-row">
-                <span class="pill" :data-tone="health && health.alive ? 'ok' : 'danger'">{{ health && health.alive ? '在线' : '离线' }}</span>
-                <div class="list-main"><div class="list-title">API 进程</div><div class="list-meta">GET /health</div></div>
+                <span class="pill" :data-tone="apiBadge.tone">{{ apiBadge.label }}</span>
+                <div class="list-main">
+                  <div class="list-title">API 进程</div>
+                  <div class="list-meta">{{ health && health.apiDetail ? health.apiDetail : 'GET /health' }}</div>
+                </div>
               </div>
               <div class="list-row">
-                <span class="pill" :data-tone="health && health.ready ? 'ok' : 'warn'">{{ health && health.ready ? '就绪' : '未就绪' }}</span>
-                <div class="list-main"><div class="list-title">数据库与迁移</div><div class="list-meta">GET /ready · {{ data ? '迁移版本 v' + data.game.config_version : '—' }}</div></div>
+                <span class="pill" :data-tone="readyBadge.tone">{{ readyBadge.label }}</span>
+                <div class="list-main">
+                  <div class="list-title">数据库与迁移</div>
+                  <div class="list-meta">{{ health && health.readyDetail ? health.readyDetail : 'GET /ready' }} · {{ data ? '迁移版本 v' + data.game.config_version : '—' }}</div>
+                </div>
               </div>
             </div>
           </div>

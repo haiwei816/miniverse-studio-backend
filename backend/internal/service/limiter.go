@@ -10,7 +10,7 @@ import (
 
 const maxLimitEntries = 10000
 
-func clientIP(r *http.Request) string {
+func clientIP(r *http.Request, trusted []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -20,24 +20,34 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	peer = peer.Unmap()
-	// Only trust proxy forwarding headers from local/private reverse proxies (e.g. Docker nginx).
-	if peer.IsLoopback() || peer.IsPrivate() {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			for i := len(parts) - 1; i >= 0; i-- {
-				candidate := strings.TrimSpace(parts[i])
-				if addr, err := netip.ParseAddr(candidate); err == nil {
-					addr = addr.Unmap()
-					if !addr.IsPrivate() && !addr.IsLoopback() || i == 0 {
-						return addr.String()
-					}
-				}
+	isTrusted := func(addr netip.Addr) bool {
+		for _, prefix := range trusted {
+			if prefix.Contains(addr) {
+				return true
 			}
 		}
-		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-			if addr, err := netip.ParseAddr(xri); err == nil {
-				return addr.Unmap().String()
+		return false
+	}
+	if !isTrusted(peer) {
+		return peer.String()
+	}
+	// Walk from the connection towards the client, stopping at the first
+	// untrusted hop. Malformed chains are ignored rather than partially trusted.
+	if values := r.Header.Values("X-Forwarded-For"); len(values) > 0 {
+		parts := strings.Split(strings.Join(values, ","), ",")
+		current := peer
+		for i := len(parts) - 1; i >= 0 && isTrusted(current); i-- {
+			addr, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+			if err != nil || addr.Zone() != "" {
+				return peer.String()
 			}
+			current = addr.Unmap()
+		}
+		return current.String()
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		if addr, err := netip.ParseAddr(xri); err == nil && addr.Zone() == "" {
+			return addr.Unmap().String()
 		}
 	}
 	return peer.String()

@@ -31,6 +31,11 @@ func (s *Service) seedGM() error {
 		if _, e := s.DB.Exec("INSERT IGNORE INTO gm_access VALUES(?,'sky-island')", v.id); e != nil {
 			return e
 		}
+		if v.role == "admin" || v.role == "operator" || v.role == "reviewer" {
+			if _, e := s.DB.Exec("INSERT IGNORE INTO gm_access(admin_id,game_id) VALUES(?,'witch-cauldron')", v.id); e != nil {
+				return e
+			}
+		}
 	}
 	return nil
 }

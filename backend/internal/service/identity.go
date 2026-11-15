@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -71,10 +72,11 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 		return map[string]any{"player_id": id, "secret": secret, "access_token": token, "expires_at": exp, "adapter": "sandbox"}, e
 	})
 	s.handle(m, "POST /v1/auth/logout", func(r *http.Request) (any, error) {
-		if _, e := s.actor(r); e != nil {
+		p, e := s.actor(r)
+		if e != nil {
 			return nil, e
 		}
-		_, e := s.DB.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash=?", s.sessionHash(r.Header.Get("Authorization")[7:]))
+		e = s.logoutPlatformSession(r.Context(), p, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /v1/games/{game}/profile", func(r *http.Request) (any, error) {

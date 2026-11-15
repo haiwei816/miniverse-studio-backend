@@ -6,6 +6,8 @@ Go 模块化单体 + MySQL 的多游戏工作室后端 MVP。基于原仓库 S0.
 
 ## 启动
 
+玩家平台已新增独立软件版：运行 `docker compose -f deploy/compose.yaml --profile player --profile gm up -d --build`，访问 `http://127.0.0.1:18082` 注册玩家账号。开发者控制台在 `18081`；两个端的账号和职责独立。功能、启动协议、模型配置及当前边界见 [玩家平台说明](docs/player-platform.md)，嵌入式仅预留 [设备接口](docs/device-interface-v1.md)。
+
 前置：Docker Desktop / Docker Engine + Compose v2。默认仅发布到本机，不需要在主机安装 Go、MySQL 或 C++。
 
 ```sh
@@ -116,6 +118,7 @@ npm run desktop:build  # 打包：src-tauri/target/release/bundle/
 - [渠道适配状态](docs/platform-adapters.md)
 - [C++ 规则与限制](docs/rulecore.md)
 - [备份、恢复与迁移](docs/operations.md)
+- [DevOps 自动检查、交付与运行](docs/devops.md)
 - [真实验收与限制](docs/verification/RESULTS.md)
 - [MVP 后续补充与验收清单](docs/mvp-follow-up.md)
 - [内存检查与参考后台功能评估](docs/verification/MEMORY_ARCHITECTURE_REVIEW.md)

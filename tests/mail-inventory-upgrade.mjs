@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, cpSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, cpSync, readdirSync } from 'node:fs';
+import { resolve, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 // Uses a newly generated database, not the live sandbox schema. No production use.
@@ -20,7 +20,7 @@ mkdirSync('work', { recursive: true });
 const fixture = mkdtempSync(resolve('work/mail-upgrade-'));
 cpSync('backend/migrations', fixture, {
   recursive: true,
-  filter: path => !path.endsWith('013_mail_inventory.sql'),
+  filter: path => !/^\d+_.+\.sql$/.test(basename(path)) || Number(basename(path).split('_')[0]) <= 12,
 });
 const dsn = `MYSQL_DSN=miniverse:local-development-only@tcp(mysql:3306)/${database}?parseTime=true`;
 sql(`CREATE DATABASE ${database}; GRANT ALL ON ${database}.* TO 'miniverse'@'%';`);
@@ -31,14 +31,15 @@ try {
     "INSERT INTO grants VALUES('legacy-mail','sky-island','legacy-player','legacy-key','wood',7,1); " +
     "INSERT INTO mail VALUES('legacy-mail','sky-island','legacy-player','legacy-mail','legacy',4102444800,TRUE);", database);
   compose('run', '--rm', '-e', dsn, 'migrate');
-  assert.equal(sql('SELECT COUNT(*) FROM migration_files;', database), '13');
+  const expected = readdirSync('backend/migrations').filter(name => /^\d+_.+\.sql$/.test(name)).length;
+  assert.equal(sql('SELECT COUNT(*) FROM migration_files;', database), String(expected));
   assert.equal(sql("SELECT amount FROM inventory WHERE player_id='legacy-player';", database), '7');
   assert.equal(sql("SELECT delta,balance,reason FROM inventory_ledger WHERE player_id='legacy-player';", database), '7\t7\tmigration_opening');
   assert.equal(sql("SELECT claimed FROM mail WHERE id='legacy-mail';", database), '1');
   compose('run', '--rm', '-e', dsn, 'migrate');
   assert.equal(sql('SELECT COUNT(*) FROM inventory_ledger;', database), '1');
   passed = true;
-  console.log('Schema 12 -> 13: legacy inventory/mail preserved, one opening entry, repeated migration does not duplicate: PASS');
+  console.log(`Schema 12 -> current (${expected} migrations): legacy inventory/mail preserved, one opening entry, repeated migration does not duplicate: PASS`);
 } finally {
   // Delete only this test's explicitly generated schema, retain failed fixtures.
   if (passed) sql(`DROP DATABASE ${database};`);

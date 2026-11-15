@@ -1,7 +1,13 @@
 name: miniverse-mvp
+x-logging: &bounded_logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 services:
   mysql:
     image: mysql:8.4
+    logging: *bounded_logs
     environment:
       MYSQL_ROOT_PASSWORD: local-root-only
       MYSQL_DATABASE: miniverse
@@ -15,32 +21,64 @@ services:
       retries: 40
   migrate:
     image: miniverse-api:local
+    logging: *bounded_logs
     build: {context: .., dockerfile: deploy/Dockerfile}
     entrypoint: [/app/migrate]
     environment: &api_env
       MYSQL_DSN: miniverse:local-development-only@tcp(mysql:3306)/miniverse?parseTime=true
       HTTP_HOST: 0.0.0.0
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       APP_ENV: sandbox
       RULECORE_ADDR: rulecore:50051
+      COMPANION_CHAT_URL: ${COMPANION_CHAT_URL:-}
+      COMPANION_API_KEY: ${COMPANION_API_KEY:-}
+      COMPANION_MODEL: ${COMPANION_MODEL:-}
     depends_on:
       mysql: {condition: service_healthy}
   api:
     image: miniverse-api:local
+    logging: *bounded_logs
+    stop_grace_period: 15s
     build: {context: .., dockerfile: deploy/Dockerfile}
     environment: *api_env
     ports: ["127.0.0.1:${API_PORT:-18080}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/ready"]
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 12
   rulecore:
     image: miniverse-rulecore:local
+    logging: *bounded_logs
     profiles: [rules]
     build: {context: .., dockerfile: rulecore/Dockerfile}
     expose: ["50051"]
   gm:
+    logging: *bounded_logs
     profiles: [gm]
     build: {context: .., dockerfile: admin/web/Dockerfile}
     ports: ["127.0.0.1:${GM_PORT:-18081}:8080"]
     depends_on:
-      api: {condition: service_started}
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/index.html"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  player:
+    logging: *bounded_logs
+    profiles: [player]
+    build: {context: .., dockerfile: player/web/Dockerfile}
+    ports: ["127.0.0.1:${PLAYER_PORT:-18082}:8080"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/index.html"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
 volumes:
   mysql_data:

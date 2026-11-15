@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:miniverse:companion-device:v1",
+  "title": "MiniVerse companion device event envelope (reserved protocol)",
+  "description": "Contract only. No physical device transport, pairing or audio stream is implemented yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "event_id", "session_id", "context_epoch", "sequence", "expires_at", "type", "payload"],
+  "properties": {
+    "protocol_version": { "const": 1 },
+    "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "context_epoch": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "expires_at": { "type": "integer", "minimum": 1 },
+    "type": { "enum": ["presence", "expression", "speech_status", "context_reset"] },
+    "payload": { "type": "object", "maxProperties": 16 }
+  }
+}

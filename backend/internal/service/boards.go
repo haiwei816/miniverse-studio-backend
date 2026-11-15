@@ -28,7 +28,7 @@ func ranks(r *http.Request, tx *sql.Tx, g, id, season, mode string, first, last 
 	if mode == "min" {
 		order = "ASC"
 	}
-	rows, e := tx.QueryContext(r.Context(), "WITH ranked AS (SELECT player_id,score,reached_at,ROW_NUMBER() OVER (ORDER BY score "+order+",reached_at ASC,player_id ASC) AS place FROM scores WHERE game_id=? AND board_id=? AND season=?) SELECT player_id,score,reached_at,place FROM ranked WHERE place BETWEEN ? AND ? ORDER BY place", g, id, season, first, last)
+	rows, e := tx.QueryContext(r.Context(), "SELECT player_id,score,reached_at FROM scores WHERE game_id=? AND board_id=? AND season=? ORDER BY score "+order+",reached_at ASC,player_id ASC LIMIT ? OFFSET ?", g, id, season, last-first+1, first-1)
 	if e != nil {
 		return nil, e
 	}
@@ -36,9 +36,10 @@ func ranks(r *http.Request, tx *sql.Tx, g, id, season, mode string, first, last 
 	a := []Rank{}
 	for rows.Next() {
 		var v Rank
-		if e = rows.Scan(&v.Player, &v.Score, &v.Reached, &v.Rank); e != nil {
+		if e = rows.Scan(&v.Player, &v.Score, &v.Reached); e != nil {
 			return nil, e
 		}
+		v.Rank = first + len(a)
 		a = append(a, v)
 	}
 	return a, rows.Err()

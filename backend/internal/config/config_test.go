@@ -19,6 +19,8 @@ func TestLoad(t *testing.T) {
 		{name: "overflow", env: map[string]string{"HTTP_PORT": "65536"}, wantErr: true},
 		{name: "empty host", env: map[string]string{"HTTP_HOST": ""}, wantErr: true},
 		{name: "invalid host", env: map[string]string{"HTTP_HOST": "not-an-ip"}, wantErr: true},
+		{name: "trusted proxies", env: map[string]string{"TRUSTED_PROXIES": "127.0.0.1, 10.1.0.0/16"}, want: "127.0.0.1:8080"},
+		{name: "invalid proxy", env: map[string]string{"TRUSTED_PROXIES": "10.0.0.1,not-an-ip"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

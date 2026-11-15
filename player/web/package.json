@@ -1,0 +1,20 @@
+{
+  "name": "miniverse-player",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node ../../scripts/build-cauldron.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "prebuild": "node ../../scripts/build-cauldron.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test src/*.test.js tests/*.test.mjs"
+  },
+  "dependencies": {
+    "vue": "3.5.45",
+    "wasmoon": "1.16.0"
+  },
+  "devDependencies": {
+    "vite": "7.3.7"
+  }
+}

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -15,6 +17,33 @@ type Mail struct {
 	Read      bool   `json:"read"`
 	Item      string `json:"item"`
 	Amount    int64  `json:"amount"`
+}
+
+// mailCursor carries the full sort key, so paging survives deletion of the last
+// row and rows with equal creation times. It is not an authorization token.
+type mailCursor struct {
+	Created int64  `json:"created"`
+	ID      string `json:"id"`
+}
+
+func decodeMailCursor(raw string) (mailCursor, error) {
+	var c mailCursor
+	if raw == "" {
+		return c, nil
+	}
+	if len(raw) > 512 {
+		return c, bad(400, "invalid_cursor")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || json.Unmarshal(data, &c) != nil || c.Created < 0 || c.ID == "" || len(c.ID) > 64 {
+		return mailCursor{}, bad(400, "invalid_cursor")
+	}
+	return c, nil
+}
+
+func encodeMailCursor(c mailCursor) string {
+	data, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(data)
 }
 
 // The mail row serializes claim/read/delete. Mail and inventory changes commit
@@ -82,6 +111,67 @@ func (s *Service) mailRoutes(m *http.ServeMux) {
 			out = append(out, v)
 		}
 		return out, rows.Err()
+	})
+	// Keep the original array-returning endpoint compatible; clients opt into
+	// pagination through /mail/page.
+	s.handle(m, "GET "+base+"/page", func(r *http.Request) (any, error) {
+		g, p, err := s.scope(r)
+		if err != nil {
+			return nil, err
+		}
+		limit, err := queryLimit(r, 200)
+		if err != nil {
+			return nil, err
+		}
+		cursor, err := decodeMailCursor(r.URL.Query().Get("cursor"))
+		if err != nil {
+			return nil, err
+		}
+		condition := ""
+		switch r.URL.Query().Get("filter") {
+		case "", "all":
+		case "unread":
+			condition = " AND COALESCE(st.read_at,0)=0"
+		case "unclaimed":
+			condition = " AND m.claimed=FALSE AND m.expires_at>UNIX_TIMESTAMP()"
+		default:
+			return nil, bad(400, "invalid_filter")
+		}
+		args := []any{g, p}
+		if cursor.ID != "" {
+			condition += " AND (g.created_at<? OR (g.created_at=? AND m.id>?))"
+			args = append(args, cursor.Created, cursor.Created, cursor.ID)
+		}
+		args = append(args, limit+1)
+		rows, err := s.DB.QueryContext(r.Context(), "SELECT m.id,m.title,m.expires_at,m.claimed,COALESCE(st.read_at,0)>0,g.item,g.amount,g.created_at FROM mail m JOIN grants g ON g.id=m.grant_id LEFT JOIN mail_states st ON st.mail_id=m.id WHERE m.game_id=? AND m.player_id=? AND COALESCE(st.deleted_at,0)=0"+condition+" ORDER BY g.created_at DESC,m.id ASC LIMIT ?", args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		items := []Mail{}
+		var last mailCursor
+		hasMore := false
+		for rows.Next() {
+			var v Mail
+			var created int64
+			if err = rows.Scan(&v.ID, &v.Title, &v.ExpiresAt, &v.Claimed, &v.Read, &v.Item, &v.Amount, &created); err != nil {
+				return nil, err
+			}
+			if len(items) == limit {
+				hasMore = true
+				break
+			}
+			items = append(items, v)
+			last = mailCursor{Created: created, ID: v.ID}
+		}
+		if err = rows.Err(); err != nil {
+			return nil, err
+		}
+		next := ""
+		if hasMore {
+			next = encodeMailCursor(last)
+		}
+		return map[string]any{"items": items, "next_cursor": next}, nil
 	})
 	s.handle(m, "POST "+base+"/{mail}/claim", func(r *http.Request) (any, error) {
 		g, p, err := s.scope(r)

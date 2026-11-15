@@ -1,38 +1,65 @@
-import { defineComponent, ref, watch } from "vue";
-import { request } from "../api.js";
-import { errorText, actionLabel, relative, stamp } from "../format.js";
+import { defineComponent, ref, computed, watch, onBeforeUnmount } from "vue";
+import { request, probeHealth } from "../api.js";
+import { errorText, actionLabel, relative, stamp, healthBadges } from "../format.js";
 import { Icon } from "../components/icons.js";
-import { notify, Empty, SkeletonRows } from "../components/ui.js";
+import { notify, Empty, ErrorBox, SkeletonRows } from "../components/ui.js";
 import { isDesktop, apiBase, setApiBase } from "../desktop.js";
 
 export const SystemView = defineComponent({
   name: "SystemView",
-  components: { Icon, Empty, SkeletonRows },
-  props: { game: String, role: String, tick: Number },
+  components: { Icon, Empty, ErrorBox, SkeletonRows },
+  props: { game: String, gameName: String, role: String, tick: Number },
   setup(props) {
     const health = ref(null);
+    const healthLoading = ref(false);
     const failures = ref([]);
+    const failuresError = ref("");
     const loading = ref(false);
     const desktop = isDesktop();
     const base = ref(apiBase());
     const saved = ref(false);
+    let generation = 0;
+    let activeAbort = null;
+
+    async function loadHealth() {
+      healthLoading.value = true;
+      try {
+        health.value = await probeHealth();
+      } finally {
+        healthLoading.value = false;
+      }
+    }
+
+    async function loadFailures() {
+      const targetGame = props.game;
+      const run = ++generation;
+      if (activeAbort) activeAbort.abort();
+      if (!targetGame) {
+        failures.value = [];
+        failuresError.value = "";
+        loading.value = false;
+        return;
+      }
+      activeAbort = new AbortController();
+      loading.value = true;
+      failuresError.value = "";
+      try {
+        const result = await request(`/gm/games/${encodeURIComponent(targetGame)}/failures`, { signal: activeAbort.signal });
+        if (run !== generation || targetGame !== props.game) return;
+        failures.value = Array.isArray(result) ? result : [];
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        if (run !== generation || targetGame !== props.game) return;
+        failuresError.value = errorText(e.code);
+        failures.value = [];
+        if (e.code !== "gm_unauthorized") notify(failuresError.value, "error");
+      } finally {
+        if (run === generation) loading.value = false;
+      }
+    }
 
     async function load() {
-      loading.value = true;
-      try {
-        const [h, r] = await Promise.all([request("/health"), request("/ready")]);
-        health.value = { alive: !!h, ready: !!r, checked: Math.floor(Date.now() / 1000) };
-      } catch {
-        health.value = { alive: false, ready: false, checked: Math.floor(Date.now() / 1000) };
-      }
-      try {
-        failures.value = await request(`/gm/games/${props.game}/failures`);
-      } catch (e) {
-        if (e.code !== "gm_unauthorized") notify(errorText(e.code), "error");
-        failures.value = [];
-      } finally {
-        loading.value = false;
-      }
+      await Promise.all([loadHealth(), loadFailures()]);
     }
 
     function saveBase() {
@@ -41,24 +68,52 @@ export const SystemView = defineComponent({
       notify("接口地址已保存，刷新后生效", "success");
     }
 
-    watch([() => props.game, () => props.tick], load, { immediate: true });
+    watch(
+      () => props.game,
+      (next, prev) => {
+        if (prev !== undefined && next !== prev) {
+          failures.value = [];
+          failuresError.value = "";
+        }
+        load();
+      },
+      { immediate: true },
+    );
+    watch(() => props.tick, load);
+    onBeforeUnmount(() => activeAbort && activeAbort.abort());
 
-    return { health, failures, loading, desktop, base, saved, load, saveBase, actionLabel, relative, stamp };
+    const badges = computed(() => healthBadges(health.value, healthLoading.value));
+    const apiBadge = computed(() => badges.value.api);
+    const readyBadge = computed(() => badges.value.ready);
+
+    return {
+      health, healthLoading, failures, failuresError, loading, desktop, base, saved,
+      apiBadge, readyBadge, load, loadHealth, loadFailures, saveBase, actionLabel, relative, stamp,
+    };
   },
   template: `
   <div class="stack">
     <div class="grid-2">
       <article class="card">
-        <div class="card-head"><div class="card-title">服务健康</div><div class="card-note">10 秒超时</div></div>
+        <div class="card-head">
+          <div class="card-title">服务健康</div>
+          <button type="button" class="link-btn" :disabled="healthLoading" @click="loadHealth">{{ healthLoading ? '探测中…' : '重新探测' }}</button>
+        </div>
         <div class="card-body">
           <div class="list">
             <div class="list-row">
-              <span class="pill" :data-tone="health && health.alive ? 'ok' : 'danger'">{{ health && health.alive ? '在线' : '离线' }}</span>
-              <div class="list-main"><div class="list-title">API 进程</div><div class="list-meta">GET /health</div></div>
+              <span class="pill" :data-tone="apiBadge.tone">{{ apiBadge.label }}</span>
+              <div class="list-main">
+                <div class="list-title">API 进程</div>
+                <div class="list-meta">{{ health && health.apiDetail ? health.apiDetail : 'GET /health' }}</div>
+              </div>
             </div>
             <div class="list-row">
-              <span class="pill" :data-tone="health && health.ready ? 'ok' : 'warn'">{{ health && health.ready ? '就绪' : '未就绪' }}</span>
-              <div class="list-main"><div class="list-title">数据库与迁移</div><div class="list-meta">GET /ready · 检查 schema_migrations</div></div>
+              <span class="pill" :data-tone="readyBadge.tone">{{ readyBadge.label }}</span>
+              <div class="list-main">
+                <div class="list-title">数据库与迁移</div>
+                <div class="list-meta">{{ health && health.readyDetail ? health.readyDetail : 'GET /ready · 检查 schema_migrations' }}</div>
+              </div>
             </div>
           </div>
           <div class="small muted" style="margin-top:10px">上次探测：{{ health ? stamp(health.checked) : '—' }}</div>
@@ -69,7 +124,7 @@ export const SystemView = defineComponent({
         <div class="card-head"><div class="card-title">接入信息</div><div class="card-note">{{ desktop ? '桌面客户端' : '浏览器' }}</div></div>
         <div class="card-body">
           <dl class="kv">
-            <div><dt>当前游戏</dt><dd class="mono">{{ game }}</dd></div>
+            <div><dt>当前游戏</dt><dd class="mono">{{ gameName ? gameName + ' (' + game + ')' : game }}</dd></div>
             <div><dt>角色</dt><dd>{{ role }}</dd></div>
           </dl>
           <template v-if="desktop">
@@ -88,7 +143,7 @@ export const SystemView = defineComponent({
     </div>
 
     <article class="card">
-      <div class="card-head"><div class="card-title">失败操作与异常</div><div class="card-note">{{ failures.length }} 条</div></div>
+      <div class="card-head"><div class="card-title">失败操作与异常</div><div class="card-note">{{ failuresError ? '读取失败' : failures.length + ' 条' }}</div></div>
       <div class="table-wrap">
         <table class="table">
           <thead><tr><th>时间</th><th>类型</th><th>错误码</th><th>操作人</th></tr></thead>
@@ -103,6 +158,7 @@ export const SystemView = defineComponent({
         </table>
       </div>
       <skeleton-rows v-if="loading" :rows="3" style="padding:12px" />
+      <error-box v-else-if="failuresError" :text="failuresError" @retry="loadFailures" />
       <empty v-else-if="!failures.length" text="没有失败记录，服务运行正常" />
     </article>
   </div>`,

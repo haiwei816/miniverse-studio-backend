@@ -7,3 +7,7 @@
 *.json text eol=lf
 *.mjs text eol=lf
 *.js text eol=lf
+# Imported immutable gameplay cores retain their original bytes and provenance.
+player/web/public/games/witch-cauldron/core/Game.lua -text
+player/web/public/games/witch-cauldron/core/Data.lua -text
+player/web/public/games/witch-cauldron/core/AlchemyBalance.lua -text

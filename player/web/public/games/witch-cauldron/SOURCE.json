@@ -1,0 +1,18 @@
+{
+  "source_project": "女巫的坩埚",
+  "source_commit": "0debb1b1de14477ce799335f5175c58b51abcd53",
+  "source_was_clean": true,
+  "profile": "cauldron-transmutation-v1",
+  "runtime": "Lua 5.4 via Wasmoon 1.16.0 / WebAssembly",
+  "core": [
+    {"source": "scripts/Game.lua", "copy": "core/Game.lua", "sha256": "41e99f47f275335264fe8829cac31f694f225932d307da74bcf9ee5a26d4210a"},
+    {"source": "scripts/Data.lua", "copy": "core/Data.lua", "sha256": "4fddaabb033dc59f3397bf4f9d003ec95b0687a0e4447539e9eda8c088dc2d17"},
+    {"source": "scripts/AlchemyBalance.lua", "copy": "core/AlchemyBalance.lua", "sha256": "109edd111343abb08f1340fdea975abc5faf132fdb6ff2bb32e8e46596f757a8"}
+  ],
+  "notes": [
+    "The Maker project is read-only; no original source or save file was modified.",
+    "BrowserBridge.lua, engine.js and the HTML interface adapt the original rules to MiniVerse.",
+    "Art and audio provenance is recorded in assets/provenance.json.",
+    "The current browser format does not silently convert legacy Maker save files."
+  ]
+}

@@ -6,6 +6,9 @@
 coverage.out
 node_modules/
 admin/web/dist/
+player/web/dist/
+player/web/public/games/witch-cauldron/core-sources.js
+player/web/public/games/witch-cauldron/runtime/
 .godot/
 *.log
 /work/

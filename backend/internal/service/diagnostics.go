@@ -23,7 +23,7 @@ func (s *Service) recordFailure(r *http.Request, code string) {
 		actor = a.ID
 		action = "operation_failed"
 	} else if code == "abnormal_score" || code == "abnormal_total" || code == "score_mismatch" || code == "illegal_replay" {
-		p, e := s.actor(r)
+		_, p, e := s.scope(r)
 		if e != nil {
 			return
 		}

@@ -1,0 +1,10 @@
+{
+  "source": "E:/taptap/女巫的坩埚/scripts",
+  "profile": "cauldron-transmutation-v1",
+  "files": {
+    "Game.lua": "41e99f47f275335264fe8829cac31f694f225932d307da74bcf9ee5a26d4210a",
+    "Data.lua": "4fddaabb033dc59f3397bf4f9d003ec95b0687a0e4447539e9eda8c088dc2d17",
+    "AlchemyBalance.lua": "109edd111343abb08f1340fdea975abc5faf132fdb6ff2bb32e8e46596f757a8"
+  },
+  "adapter": "BrowserBridge.lua is platform glue; the three files above are byte-for-byte source copies."
+}

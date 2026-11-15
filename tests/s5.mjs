@@ -1,5 +1,6 @@
 import assert from'node:assert/strict';import{api,login}from'./client.mjs';
 const a=await login(),b=await login(),t=a.access_token,base='/v1/games/sky-island',id='reward-'+Date.now();
+await api(base+'/activities','PUT',{id,version:1,kind:'milestone',event_type:id,target:1,starts_at:1,ends_at:4102444800,client_allowed:true,item:'wood',reward_amount:0},t,400);
 await api(base+'/activities','PUT',{id,version:1,kind:'milestone',event_type:id,target:1,starts_at:1,ends_at:4102444800,client_allowed:true,item:'wood',reward_amount:10},t);
 await api(base+'/events','POST',{event_id:'complete',event_type:id,amount:1},t);
 await Promise.all(Array.from({length:8},()=>api(base+`/activities/${id}/reward`,'POST',{},t)));

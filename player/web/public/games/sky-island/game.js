@@ -1,0 +1,16 @@
+(() => {
+  const sdk=window.MiniVerseGame;
+  const definitions=[{name:'探险小屋',icon:'🏡'},{name:'云端风车',icon:'🌬'},{name:'星光灯塔',icon:'🗼'}];
+  let state={wood:8,levels:[0,0,0]},busy=false,connected=false;
+  const total=()=>state.levels.reduce((a,b)=>a+b,0);
+  function valid(value){return value&&Number.isInteger(value.wood)&&value.wood>=0&&value.wood<=1000000&&Array.isArray(value.levels)&&value.levels.length===3&&value.levels.every(n=>Number.isInteger(n)&&n>=0&&n<=3);}
+  function render(){document.getElementById('wood').textContent=state.wood;document.getElementById('progress').textContent=`${total()} / 9 次升级`;document.getElementById('completion').textContent=total()===9?'✦ 小岛建成了！你和伙伴拥有了一段新的共同经历。':'';document.getElementById('village').textContent=state.levels.map((level,i)=>level?definitions[i].icon:'🌱').join(' ');const list=document.getElementById('buildings');list.replaceChildren();definitions.forEach((item,i)=>{const node=document.createElement('div');node.className='building';const icon=document.createElement('div');icon.className='icon';icon.textContent=item.icon;const title=document.createElement('h3');title.textContent=item.name;const text=document.createElement('p');text.textContent=`等级 ${state.levels[i]} / 3`;const button=document.createElement('button');const cost=(state.levels[i]+1)*8;button.textContent=state.levels[i]===3?'已经建成':`升级 · ${cost} 木材`;button.disabled=!connected||busy||state.levels[i]===3||state.wood<cost;button.addEventListener('click',()=>upgrade(i));node.append(icon,title,text,button);list.append(node);});document.getElementById('gather').disabled=!connected||busy;document.getElementById('save').disabled=!connected||busy;document.getElementById('reload').disabled=!connected||busy;document.getElementById('hint').disabled=!connected;}
+  async function sync(){try{await sdk.save(state);}catch{} }
+  async function updateContext(){try{await sdk.context('cloud-village',`已升级${total()}次，拥有${state.wood}木材；先采集再建设`);}catch(error){sdk.status(error.message,'error');}}
+  async function upgrade(index){const cost=(state.levels[index]+1)*8;if(busy||state.wood<cost||state.levels[index]>=3)return;busy=true;state.wood-=cost;state.levels[index]++;render();await sync();try{await sdk.event('building_upgraded');}catch(error){sdk.status(error.message,'error');}await updateContext();busy=false;render();}
+  document.getElementById('gather').addEventListener('click',async()=>{if(busy)return;busy=true;state.wood=Math.min(1000000,state.wood+4);render();await sync();busy=false;render();});
+  document.getElementById('save').addEventListener('click',sync);
+  document.getElementById('reload').addEventListener('click',async()=>{if(busy)return;busy=true;render();try{const saved=await sdk.load();if(saved&&!valid(saved))throw new Error('云存档格式不兼容，请联系开发者。');state=saved||{wood:8,levels:[0,0,0]};await updateContext();}catch(error){sdk.status(error.message,'error');}finally{busy=false;render();}});
+  sdk.ready.then(async()=>{try{await sdk.api('/profile');const saved=await sdk.load();if(saved&&!valid(saved))throw new Error('云存档格式不兼容，请联系开发者。');if(saved)state=saved;connected=true;render();await updateContext();sdk.setupHint();}catch(error){sdk.status(error.message,'error');}});
+  render();
+})();

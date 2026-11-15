@@ -26,6 +26,7 @@ const paths = {
   plus: ["M12 5v14", "M5 12h14"],
   play: ["M7 4l12 8-12 8z"],
   trash: ["M4 7h16", "M9 7V5h6v2", "M6 7l1 13h10l1-13", "M10 11v6", "M14 11v6"],
+  menu: ["M4 7h16", "M4 12h16", "M4 17h16"],
 };
 
 export const Icon = defineComponent({

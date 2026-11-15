@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"net/http/httptest"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -58,24 +59,25 @@ func TestLimiterConcurrentSources(t *testing.T) {
 }
 
 func TestClientIPTrustedProxyHandling(t *testing.T) {
-	direct := httptest.NewRequest("GET", "/", nil)
-	direct.RemoteAddr = "198.51.100.10:12345"
-	direct.Header.Set("X-Forwarded-For", "203.0.113.9")
-	if got := clientIP(direct); got != "198.51.100.10" {
-		t.Fatalf("untrusted proxy header accepted: got %s", got)
-	}
-
-	proxied := httptest.NewRequest("GET", "/", nil)
-	proxied.RemoteAddr = "172.18.0.5:54321"
-	proxied.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.20")
-	if got := clientIP(proxied); got != "198.51.100.20" {
-		t.Fatalf("expected rightmost client IP from trusted proxy, got %s", got)
-	}
-
-	realIP := httptest.NewRequest("GET", "/", nil)
-	realIP.RemoteAddr = "127.0.0.1:4321"
-	realIP.Header.Set("X-Real-IP", "203.0.113.42")
-	if got := clientIP(realIP); got != "203.0.113.42" {
-		t.Fatalf("expected X-Real-IP from loopback proxy, got %s", got)
+	trusted := []netip.Prefix{netip.MustParsePrefix("172.18.0.5/32"), netip.MustParsePrefix("10.0.0.2/32")}
+	for _, tc := range []struct{ peer, xff, real, want string }{
+		{"127.0.0.1:4321", "203.0.113.9", "", "127.0.0.1"},
+		{"172.18.0.6:1", "203.0.113.9", "", "172.18.0.6"},
+		{"172.18.0.5:1", "203.0.113.9, 10.0.0.2", "", "203.0.113.9"},
+		{"172.18.0.5:1", "203.0.113.9, 10.0.0.3", "", "10.0.0.3"},
+		{"172.18.0.5:1", "broken", "203.0.113.9", "172.18.0.5"},
+		{"172.18.0.5:1", "", "203.0.113.42", "203.0.113.42"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tc.peer
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if tc.real != "" {
+			r.Header.Set("X-Real-IP", tc.real)
+		}
+		if got := clientIP(r, trusted); got != tc.want {
+			t.Errorf("peer=%s xff=%q: got %s, want %s", tc.peer, tc.xff, got, tc.want)
+		}
 	}
 }

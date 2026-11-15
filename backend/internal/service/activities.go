@@ -31,7 +31,7 @@ func validateActivity(a Activity) error {
 	if a.Kind == "signin" && a.Target != 1 {
 		return bad(400, "signin_target_must_be_one")
 	}
-	if a.ID == "" || len(a.ID) > 64 || a.Version < 1 || a.Event == "" || len(a.Event) > 64 || a.Target < 1 || a.Target > 1000000000 || a.Starts >= a.Ends || a.Amount < 0 || a.Amount > 1000000 {
+	if a.ID == "" || len(a.ID) > 64 || a.Version < 1 || a.Event == "" || len(a.Event) > 64 || a.Target < 1 || a.Target > 1000000000 || a.Starts >= a.Ends || a.Amount < 1 || a.Amount > 1000000 {
 		return bad(400, "invalid_activity")
 	}
 	switch a.Kind {

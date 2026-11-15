@@ -1,8 +1,8 @@
-import { defineComponent, ref, watch, computed } from "vue";
+import { defineComponent, ref, watch, computed, onBeforeUnmount } from "vue";
 import { request } from "../api.js";
 import { errorText, count, stamp, relative } from "../format.js";
 import { Icon } from "../components/icons.js";
-import { Drawer, notify, Empty, SkeletonRows } from "../components/ui.js";
+import { Drawer, notify, Empty, ErrorBox, SkeletonRows } from "../components/ui.js";
 
 const TABS = [
   { id: "inventory", label: "背包" },
@@ -15,59 +15,150 @@ const TABS = [
 
 export const PlayersView = defineComponent({
   name: "PlayersView",
-  components: { Icon, Drawer, Empty, SkeletonRows },
-  props: { game: String, role: String, tick: Number, initialQuery: String },
-  setup(props) {
-    const query = ref("");
+  components: { Icon, Drawer, Empty, ErrorBox, SkeletonRows },
+  props: { game: String, gameName: String, role: String, tick: Number, initialQuery: String, initialQuerySeq: Number },
+  emits: ["award"],
+  setup(props, { emit }) {
+    const query = ref(props.initialQuery || "");
     const rows = ref([]);
     const loading = ref(false);
+    const error = ref("");
     const detail = ref(null);
     const detailLoading = ref(false);
+    const detailError = ref("");
+    const detailRow = ref(null);
     const tab = ref("inventory");
     const drawerOpen = ref(false);
+    let listGen = 0;
+    let detailGen = 0;
+    let listAbort = null;
+    let detailAbort = null;
+
+    function abortAll() {
+      if (listAbort) {
+        listAbort.abort();
+        listAbort = null;
+      }
+      if (detailAbort) {
+        detailAbort.abort();
+        detailAbort = null;
+      }
+    }
 
     async function load() {
-      if (!props.game) return;
-      loading.value = true;
-      try {
-        rows.value = await request(`/gm/games/${props.game}/players?q=${encodeURIComponent(query.value)}`);
-      } catch (e) {
-        notify(errorText(e.code), "error");
+      const targetGame = props.game;
+      const run = ++listGen;
+      if (listAbort) listAbort.abort();
+      if (!targetGame) {
         rows.value = [];
-      } finally {
+        error.value = "";
         loading.value = false;
+        return;
+      }
+      listAbort = new AbortController();
+      loading.value = true;
+      error.value = "";
+      try {
+        const result = await request(`/gm/games/${encodeURIComponent(targetGame)}/players?q=${encodeURIComponent(query.value.trim())}`, {
+          signal: listAbort.signal,
+        });
+        if (run !== listGen || targetGame !== props.game) return;
+        rows.value = Array.isArray(result) ? result : [];
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        if (run !== listGen || targetGame !== props.game) return;
+        error.value = errorText(e.code);
+        rows.value = [];
+        notify(error.value, "error");
+      } finally {
+        if (run === listGen) loading.value = false;
       }
     }
 
     async function inspect(row) {
+      const targetGame = props.game;
+      if (!targetGame || !row) return;
+      const run = ++detailGen;
+      if (detailAbort) detailAbort.abort();
+      detailAbort = new AbortController();
+      detailRow.value = row;
       drawerOpen.value = true;
       detailLoading.value = true;
+      detailError.value = "";
       detail.value = null;
       tab.value = "inventory";
       try {
-        detail.value = await request(`/gm/games/${props.game}/players/${row.player_id}`);
+        const result = await request(`/gm/games/${encodeURIComponent(targetGame)}/players/${encodeURIComponent(row.player_id)}`, {
+          signal: detailAbort.signal,
+        });
+        if (run !== detailGen || targetGame !== props.game) return;
+        detail.value = result;
       } catch (e) {
-        notify(errorText(e.code), "error");
-        drawerOpen.value = false;
+        if (e && e.name === "AbortError") return;
+        if (run !== detailGen || targetGame !== props.game) return;
+        detailError.value = errorText(e.code);
+        notify(detailError.value, "error");
       } finally {
-        detailLoading.value = false;
+        if (run === detailGen) detailLoading.value = false;
       }
     }
 
-    watch([() => props.game, () => props.tick], load, { immediate: true });
+    function resetContext() {
+      detailGen++;
+      if (detailAbort) {
+        detailAbort.abort();
+        detailAbort = null;
+      }
+      drawerOpen.value = false;
+      detail.value = null;
+      detailRow.value = null;
+      detailError.value = "";
+      detailLoading.value = false;
+      rows.value = [];
+      error.value = "";
+    }
+
     watch(
-      () => props.initialQuery,
-      (value) => {
+      () => props.game,
+      (next, prev) => {
+        if (prev !== undefined && next !== prev) resetContext();
+        load();
+      },
+      { immediate: true },
+    );
+
+    watch(
+      () => props.tick,
+      () => load(),
+    );
+
+    watch(
+      () => [props.initialQuery, props.initialQuerySeq],
+      ([value]) => {
         if (value === undefined || value === null) return;
         query.value = value;
+        resetContext();
         load();
       },
     );
 
-    const empty = computed(() => !loading.value && rows.value.length === 0);
-    const detailTitle = computed(() => (detail.value ? detail.value.name || detail.value.player_id : "玩家详情"));
+    onBeforeUnmount(abortAll);
 
-    return { query, rows, loading, detail, detailLoading, drawerOpen, tab, TABS, load, inspect, empty, detailTitle, count, stamp, relative };
+    function awardCurrent() {
+      const uid = (detail.value && detail.value.player_id) || (detailRow.value && detailRow.value.player_id);
+      if (!uid) return;
+      drawerOpen.value = false;
+      emit("award", uid);
+    }
+
+    const empty = computed(() => !loading.value && !error.value && rows.value.length === 0);
+    const detailTitle = computed(() => (detail.value ? detail.value.name || detail.value.player_id : detailRow.value ? detailRow.value.name || detailRow.value.player_id : "玩家详情"));
+    const canAward = computed(() => props.role !== "support" && props.role !== "reviewer");
+
+    return {
+      query, rows, loading, error, detail, detailLoading, detailError, detailRow, drawerOpen, tab, TABS,
+      load, inspect, awardCurrent, empty, detailTitle, canAward, count, stamp, relative,
+    };
   },
   template: `
   <div class="stack">
@@ -77,7 +168,7 @@ export const PlayersView = defineComponent({
         <input class="input" v-model="query" placeholder="玩家 UID 或角色名，回车查询" @keyup.enter="load" />
       </div>
       <button class="btn btn-ghost" @click="load"><icon name="refresh" :size="14" />查询</button>
-      <span class="small muted">最多返回 100 条 · 点击行查看资产</span>
+      <span class="small muted">{{ gameName || game }} · 最多返回 100 条 · 点击行查看资产</span>
     </div>
 
     <article class="card">
@@ -94,12 +185,21 @@ export const PlayersView = defineComponent({
         </table>
       </div>
       <skeleton-rows v-if="loading" :rows="4" style="padding:12px" />
+      <error-box v-else-if="error" :text="error" @retry="load" />
       <empty v-else-if="empty" text="没有匹配的玩家，换个 UID 或角色名试试" />
     </article>
 
-    <drawer :open="drawerOpen" :title="detailTitle" :subtitle="detail ? detail.player_id : ''" @close="drawerOpen = false">
+    <drawer :open="drawerOpen" :title="detailTitle" :subtitle="detail ? (gameName || game) + ' · ' + detail.player_id : (detailRow ? detailRow.player_id : '')" @close="drawerOpen = false">
       <skeleton-rows v-if="detailLoading" :rows="5" />
+      <error-box v-else-if="detailError" :text="detailError" @retry="detailRow && inspect(detailRow)" />
       <div v-else-if="detail">
+        <div class="toolbar" style="margin-bottom:12px;justify-content:space-between">
+          <span class="pill" data-tone="info">{{ gameName || game }}</span>
+          <button v-if="canAward" type="button" class="btn btn-soft btn-sm" @click="awardCurrent">
+            <icon name="operations" :size="13" />为此玩家补发
+          </button>
+        </div>
+
         <div class="tabs" role="tablist">
           <button v-for="t in TABS" :key="t.id" role="tab" :aria-selected="String(tab === t.id)" @click="tab = t.id">{{ t.label }}</button>
         </div>

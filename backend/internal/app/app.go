@@ -36,6 +36,7 @@ func Run(cfg config.Config) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", router)
 	svc := service.New(db, os.Getenv("APP_ENV") == "sandbox")
+	svc.TrustedProxies = cfg.TrustedProxies
 	defer svc.Close()
 	if err := svc.Initialize(); err != nil {
 		return err
@@ -55,6 +56,8 @@ func Run(cfg config.Config) error {
 	server := &http.Server{Handler: httpserver.Logging(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopCleanup := database.StartCleanup(ctx, db)
+	defer stopCleanup()
 	if err := httpserver.Serve(ctx, server, listener, 10*time.Second); err != nil {
 		return fmt.Errorf("serve HTTP: %w", err)
 	}

@@ -7,6 +7,7 @@ var game_id := "sky-island"
 var access_token := ""
 var player_id := ""
 var expires_at := 0
+var companion_epoch := 0
 var online := true
 var cache_path := "user://miniverse_cache.json"
 
@@ -50,6 +51,29 @@ func use_session(player: String, token: String, expiry := 0) -> void:
 	player_id = player
 	access_token = token
 	expires_at = expiry
+	companion_epoch = 0
+
+# Platform credentials are for the trusted player application. Independent games
+# should receive a one-use launch code and use exchange_launch instead.
+func platform_login(username: String, password: String) -> Dictionary:
+	var result := await request("/v1/platform/auth/login", HTTPClient.METHOD_POST, {"username": username, "password": password}, false)
+	if result.ok:
+		use_session(result.data.player_id, result.data.access_token, int(result.data.expires_at))
+	return result
+
+func exchange_launch(game: String, code: String, verifier: String) -> Dictionary:
+	var result := await request("/v1/platform/launch/exchange", HTTPClient.METHOD_POST, {"game_id": game, "launch_code": code, "code_verifier": verifier}, false)
+	if result.ok:
+		game_id = game
+		use_session(result.data.player_id, result.data.access_token, int(result.data.expires_at))
+		companion_epoch = int(result.data.epoch)
+	return result
+
+func companion_context(context: Dictionary) -> Dictionary:
+	var payload := context.duplicate(true)
+	if not payload.has("epoch"):
+		payload["epoch"] = companion_epoch
+	return await request("/v1/games/" + game_id.uri_encode() + "/companion/context", HTTPClient.METHOD_PUT, payload, false)
 
 func session_scope() -> String:
 	return base_url.trim_suffix("/") + "/" + player_id + "/" + game_id
@@ -62,11 +86,13 @@ func profile() -> Dictionary:
 
 func logout() -> Dictionary:
 	var token := access_token
-	var result := await request("/v1/auth/logout", HTTPClient.METHOD_POST, {}, false)
+	var path := "/v1/games/" + game_id.uri_encode() + "/session/logout" if token.begins_with("g_") else "/v1/platform/auth/logout"
+	var result := await request(path, HTTPClient.METHOD_POST, {}, false)
 	if access_token == token or access_token.is_empty():
 		access_token = ""
 		player_id = ""
 		expires_at = 0
+		companion_epoch = 0
 	return result
 
 func cache_save(data: Dictionary) -> Error:
@@ -137,6 +163,10 @@ func event(event_id: String, event_type: String, amount := 1) -> Dictionary:
 
 func mail_list(filter := "all", limit := 200) -> Dictionary:
 	return await game_request("/mail?filter=" + filter.uri_encode() + "&limit=" + str(limit))
+
+# Cursor-based mailbox traversal. Continue with data.next_cursor until empty.
+func mail_page(filter := "all", limit := 200, cursor := "") -> Dictionary:
+	return await game_request("/mail/page?filter=" + filter.uri_encode() + "&limit=" + str(limit) + "&cursor=" + cursor.uri_encode())
 
 func read_mail(id: String) -> Dictionary:
 	return await game_request("/mail/" + id.uri_encode() + "/read", HTTPClient.METHOD_POST)

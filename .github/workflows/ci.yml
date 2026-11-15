@@ -1,30 +1,184 @@
 name: verify
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      package_images:
+        description: Export the tested sandbox images as a downloadable bundle
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
-        with: {go-version: '1.27.3'}
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 ../.github/workflows/ci.yml
+      - name: Test and check Go
+        run: |
+          go test -race -count=1 ./...
+          go vet ./...
+      - name: Build Linux API and migrations
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p ../work/backend-linux-amd64
+          go build -trimpath -o ../work/backend-linux-amd64/api ./cmd/api
+          go build -trimpath -o ../work/backend-linux-amd64/migrate ./cmd/migrate
+          cp -r migrations ../work/backend-linux-amd64/
+          printf '%s\n' "$GITHUB_SHA" > ../work/backend-linux-amd64/COMMIT
+          cd ../work/backend-linux-amd64
+          sha256sum api migrate migrations/*.sql COMMIT > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-linux-amd64-${{ github.sha }}
+          path: work/backend-linux-amd64/
+          retention-days: 14
+          if-no-files-found: error
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [admin, player]
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
-        with: {node-version: '24'}
-      - run: cd backend && go test -race ./... && go vet ./... && go build ./...
-      - run: cd admin/web && npm ci && npm audit --audit-level=high && npm run build
-      - run: docker compose -f deploy/compose.yaml --profile rules --profile gm up -d --build
-      - run: node tests/e2e.mjs
-      - run: node tests/mail-inventory.mjs
-      - run: node tests/mail-inventory-upgrade.mjs
-      - run: node tests/migrations.mjs && node tests/production-boundary.mjs
-      - run: node tests/recovery.mjs
-      - run: |
-          curl -fsSL https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_linux.x86_64.zip -o /tmp/godot.zip
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/web/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - name: Test player session and bridge boundaries
+        if: matrix.app == 'player'
+        run: |
+          npm test
+          node --test ../../scripts/package-images.test.mjs
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-web-${{ github.sha }}
+          path: ${{ matrix.app }}/web/dist/
+          retention-days: 14
+          if-no-files-found: error
+
+  integration:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      COMPOSE_PROJECT_NAME: miniverse-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      # CI uses deterministic local demos, never real model credentials.
+      COMPANION_CHAT_URL: ''
+      COMPANION_API_KEY: ''
+      COMPANION_MODEL: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate and start isolated sandbox
+        run: |
+          docker compose -f deploy/compose.yaml --profile rules --profile gm --profile player config --quiet
+          docker compose -f deploy/compose.yaml --profile rules --profile gm --profile player up -d --build --wait --wait-timeout 180
+      - name: HTTP, migrations, permissions and dependency recovery
+        run: node scripts/integration.mjs
+      - name: Install Godot test runner
+        run: |
+          curl -fsSL --retry 3 https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_linux.x86_64.zip -o /tmp/godot.zip
           unzip -q /tmp/godot.zip -d /tmp/godot
-          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --editor --import --quit
-          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_sdk.gd
-          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_saves.gd
-          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_local_bridge.gd
-          /tmp/godot/Godot_v4.5.1-stable_linux.x86_64 --headless --path sdk/godot --script test_mail_inventory.gd
+      - name: Godot SDK including platform handoff
+        run: |
+          GODOT=/tmp/godot/Godot_v4.5.1-stable_linux.x86_64
+          "$GODOT" --headless --path sdk/godot --editor --import --quit
+          for script in test_sdk test_saves test_local_bridge test_mail_inventory test_platform; do
+            timeout 120 "$GODOT" --headless --path sdk/godot --script "$script.gd"
+          done
+      - name: Package the tested container images
+        if: github.event_name == 'workflow_dispatch' && inputs.package_images
+        run: node scripts/package-images.mjs
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.package_images
+        with:
+          name: sandbox-images-${{ github.sha }}
+          path: work/delivery/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Capture sandbox diagnostics
+        if: always()
+        run: |
+          mkdir -p work/ci
+          docker compose -f deploy/compose.yaml --profile rules --profile gm --profile player ps -a > work/ci/compose-ps.txt
+          docker compose -f deploy/compose.yaml --profile rules --profile gm --profile player logs --no-color > work/ci/compose.log 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: verification, path: docs/verification/}
+        with:
+          name: integration-diagnostics-${{ github.sha }}
+          path: work/ci/
+          retention-days: 7
+      - name: Stop this run's sandbox
+        if: always()
+        run: docker compose -f deploy/compose.yaml --profile rules --profile gm --profile player down --remove-orphans
+
+  desktop:
+    needs: frontend
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: admin/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: admin/web/package-lock.json
+      - name: Prepare Rust MSVC toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm ci
+      - name: Build Windows installer
+        run: npm run desktop:build -- --ci --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x64-${{ github.sha }}
+          path: admin/web/src-tauri/target/release/bundle/nsis/*-setup.exe
+          retention-days: 14
+          if-no-files-found: error

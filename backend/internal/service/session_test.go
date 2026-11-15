@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,57 +17,144 @@ import (
 // Small database/sql fixture: exercise real auth/logout handlers without MySQL.
 // It intentionally supports only the session queries used by those handlers.
 type sessionFixture struct {
-	mu   sync.Mutex
-	rows map[string]sessionRecord
+	mu                    sync.Mutex
+	rows                  map[string]sessionRecord
+	contexts              map[string]companionContext
+	failClear, failDelete bool
 }
 type sessionRecord struct {
 	player string
 	expiry int64
 }
-type sessionConn struct{ fixture *sessionFixture }
+type sessionConn struct {
+	fixture *sessionFixture
+	tx      *sessionTx
+}
+type sessionTx struct {
+	conn     *sessionConn
+	rows     map[string]sessionRecord
+	contexts map[string]companionContext
+}
 type sessionDriver struct{}
 type sessionRows struct {
 	values []driver.Value
+	cols   []string
 	done   bool
 }
 
-func (f *sessionFixture) Connect(context.Context) (driver.Conn, error) { return &sessionConn{f}, nil }
-func (f *sessionFixture) Driver() driver.Driver                        { return sessionDriver{} }
-func (sessionDriver) Open(string) (driver.Conn, error)                 { return nil, errors.New("use connector") }
+func (f *sessionFixture) Connect(context.Context) (driver.Conn, error) {
+	return &sessionConn{fixture: f}, nil
+}
+func (f *sessionFixture) Driver() driver.Driver        { return sessionDriver{} }
+func (sessionDriver) Open(string) (driver.Conn, error) { return nil, errors.New("use connector") }
 func (*sessionConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("unsupported prepare")
 }
-func (*sessionConn) Close() error              { return nil }
-func (*sessionConn) Begin() (driver.Tx, error) { return nil, errors.New("unsupported transaction") }
-func (c *sessionConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
-	if q != "SELECT player_id FROM sessions WHERE token_hash=? AND expires_at>?" {
-		return nil, errors.New("unexpected query: " + q)
+func (*sessionConn) Close() error { return nil }
+func (c *sessionConn) Begin() (driver.Tx, error) {
+	c.fixture.mu.Lock()
+	tx := &sessionTx{conn: c, rows: map[string]sessionRecord{}, contexts: map[string]companionContext{}}
+	for k, v := range c.fixture.rows {
+		tx.rows[k] = v
+	}
+	for k, v := range c.fixture.contexts {
+		tx.contexts[k] = v
+	}
+	c.tx = tx
+	return tx, nil
+}
+func (tx *sessionTx) Commit() error {
+	tx.conn.fixture.rows = tx.rows
+	tx.conn.fixture.contexts = tx.contexts
+	tx.conn.tx = nil
+	tx.conn.fixture.mu.Unlock()
+	return nil
+}
+func (tx *sessionTx) Rollback() error {
+	tx.conn.tx = nil
+	tx.conn.fixture.mu.Unlock()
+	return nil
+}
+func (c *sessionConn) lock() func() {
+	if c.tx != nil {
+		return func() {}
 	}
 	c.fixture.mu.Lock()
-	defer c.fixture.mu.Unlock()
-	v, ok := c.fixture.rows[args[0].Value.(string)]
+	return c.fixture.mu.Unlock
+}
+func (c *sessionConn) records() map[string]sessionRecord {
+	if c.tx != nil {
+		return c.tx.rows
+	}
+	return c.fixture.rows
+}
+func (c *sessionConn) contexts() map[string]companionContext {
+	if c.tx != nil {
+		return c.tx.contexts
+	}
+	if c.fixture.contexts == nil {
+		c.fixture.contexts = map[string]companionContext{}
+	}
+	return c.fixture.contexts
+}
+func (c *sessionConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	unlock := c.lock()
+	defer unlock()
 	rows := &sessionRows{}
-	if ok && v.expiry > args[1].Value.(int64) {
-		rows.values = []driver.Value{v.player}
+	switch strings.TrimSuffix(q, " FOR UPDATE") {
+	case "SELECT player_id FROM sessions WHERE token_hash=? AND expires_at>?":
+		v, ok := c.records()[args[0].Value.(string)]
+		if ok && v.expiry > args[1].Value.(int64) {
+			rows.values = []driver.Value{v.player}
+		}
+	case "SELECT epoch FROM companion_contexts WHERE player_id=?":
+		rows.cols = []string{"epoch"}
+		if v, ok := c.contexts()[args[0].Value.(string)]; ok {
+			rows.values = []driver.Value{v.Epoch}
+		}
+	case "SELECT game_id,epoch,scene_id,quest_stage,updated_at FROM companion_contexts WHERE player_id=?":
+		rows.cols = []string{"game_id", "epoch", "scene_id", "quest_stage", "updated_at"}
+		if v, ok := c.contexts()[args[0].Value.(string)]; ok {
+			rows.values = []driver.Value{v.Game, v.Epoch, v.Scene, v.Quest, v.Updated}
+		}
+	default:
+		return nil, errors.New("unexpected query: " + q)
 	}
 	return rows, nil
 }
 func (c *sessionConn) ExecContext(_ context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
+	unlock := c.lock()
+	defer unlock()
+	if strings.HasPrefix(q, "INSERT INTO companion_contexts(") {
+		if c.fixture.failClear {
+			return nil, errors.New("context write failed")
+		}
+		key := args[0].Value.(string)
+		previous := c.contexts()[key]
+		c.contexts()[key] = companionContext{Game: args[1].Value.(string), Epoch: previous.Epoch + 1, Targets: []string{}, Updated: args[2].Value.(int64)}
+		return driver.RowsAffected(1), nil
+	}
 	if q != "DELETE FROM sessions WHERE token_hash=?" {
 		return nil, errors.New("unexpected exec: " + q)
 	}
-	c.fixture.mu.Lock()
-	defer c.fixture.mu.Unlock()
+	if c.fixture.failDelete {
+		return nil, errors.New("session delete failed")
+	}
 	key := args[0].Value.(string)
-	_, found := c.fixture.rows[key]
-	delete(c.fixture.rows, key)
+	_, found := c.records()[key]
+	delete(c.records(), key)
 	if found {
 		return driver.RowsAffected(1), nil
 	}
 	return driver.RowsAffected(0), nil
 }
-func (*sessionRows) Columns() []string { return []string{"player_id"} }
-func (*sessionRows) Close() error      { return nil }
+func (r *sessionRows) Columns() []string {
+	if r.cols != nil {
+		return r.cols
+	}
+	return []string{"player_id"}
+}
+func (*sessionRows) Close() error { return nil }
 func (r *sessionRows) Next(dst []driver.Value) error {
 	if r.done || r.values == nil {
 		return io.EOF
@@ -123,5 +211,43 @@ func TestSessionLogoutRevokesOnlyCurrentEnvironmentSession(t *testing.T) {
 			fixture.rows[otherEnv.sessionHash("foreign-only")] = sessionRecord{"foreign", future}
 			check("GET", "/private", "foreign-only", 401)
 		})
+	}
+}
+
+func TestBothLogoutRoutesClearWorldAtomically(t *testing.T) {
+	for _, path := range []string{"/v1/auth/logout", "/v1/platform/auth/logout"} {
+		for _, failure := range []string{"", "clear", "delete"} {
+			t.Run(path+"/"+failure, func(t *testing.T) {
+				f := &sessionFixture{
+					rows:      map[string]sessionRecord{},
+					contexts:  map[string]companionContext{"player": {Game: "sky-island", Epoch: 7, Scene: "old-world"}},
+					failClear: failure == "clear", failDelete: failure == "delete",
+				}
+				db := sql.OpenDB(f)
+				defer db.Close()
+				s := New(db, true)
+				f.rows[s.sessionHash("current")] = sessionRecord{"player", time.Now().Add(time.Hour).Unix()}
+				f.rows[s.sessionHash("other")] = sessionRecord{"player", time.Now().Add(time.Hour).Unix()}
+				mux := http.NewServeMux()
+				s.identityRoutes(mux)
+				s.playerPlatformRoutes(mux)
+				r := httptest.NewRequest("POST", path, nil)
+				r.Header.Set("Authorization", "Bearer current")
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, r)
+				_, retained := f.rows[s.sessionHash("current")]
+				world := f.contexts["player"]
+				if failure == "" {
+					if w.Code != 200 || retained || world.Epoch != 8 || world.Game != "" || world.Scene != "" {
+						t.Fatalf("logout did not revoke and clear: status=%d retained=%v world=%+v body=%s", w.Code, retained, world, w.Body.String())
+					}
+				} else if w.Code != 500 || !retained || world.Epoch != 7 || world.Game != "sky-island" || world.Scene != "old-world" {
+					t.Fatalf("failed logout partially committed: status=%d retained=%v world=%+v body=%s", w.Code, retained, world, w.Body.String())
+				}
+				if _, ok := f.rows[s.sessionHash("other")]; !ok {
+					t.Fatal("logout deleted another platform session")
+				}
+			})
+		}
 	}
 }

@@ -1,5 +1,26 @@
-import { defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick } from "vue";
 import { Icon } from "./icons.js";
+
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function trapFocus(container, event) {
+  if (event.key !== "Tab" || !container) return;
+  const nodes = Array.from(container.querySelectorAll(FOCUSABLE)).filter((el) => el.offsetParent !== null);
+  if (!nodes.length) {
+    event.preventDefault();
+    container.focus();
+    return;
+  }
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === container)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 const tips = reactive([]);
 let nextId = 1;
@@ -37,15 +58,30 @@ export const Drawer = defineComponent({
   props: { open: { type: Boolean, default: false }, title: String, subtitle: String },
   emits: ["close"],
   setup(props, { emit, slots }) {
+    const panel = ref(null);
+    let restoreFocus = null;
     const onKey = (e) => {
       if (e.key === "Escape") emit("close");
+      else if (e.key === "Tab") trapFocus(panel.value, e);
     };
     watch(
       () => props.open,
-      (open) => {
-        if (open) document.addEventListener("keydown", onKey);
-        else document.removeEventListener("keydown", onKey);
-        document.documentElement.style.overflow = open ? "hidden" : "";
+      async (open) => {
+        if (open) {
+          restoreFocus = document.activeElement;
+          document.addEventListener("keydown", onKey);
+          document.documentElement.style.overflow = "hidden";
+          await nextTick();
+          if (panel.value) {
+            const first = panel.value.querySelector(FOCUSABLE);
+            (first || panel.value).focus();
+          }
+        } else {
+          document.removeEventListener("keydown", onKey);
+          document.documentElement.style.overflow = "";
+          if (restoreFocus && typeof restoreFocus.focus === "function") restoreFocus.focus();
+          restoreFocus = null;
+        }
       },
     );
     onBeforeUnmount(() => {
@@ -56,7 +92,7 @@ export const Drawer = defineComponent({
       if (!props.open) return null;
       return h("div", null, [
         h("div", { class: "scrim", onClick: () => emit("close"), "aria-hidden": "true" }),
-        h("aside", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-label": props.title || "详情" }, [
+        h("aside", { ref: panel, tabindex: "-1", class: "drawer", role: "dialog", "aria-modal": "true", "aria-label": props.title || "详情" }, [
           h("header", { class: "drawer-head" }, [
             h("div", null, [
               h("div", { class: "drawer-title" }, props.title || ""),
@@ -72,6 +108,68 @@ export const Drawer = defineComponent({
         ]),
       ]);
     };
+  },
+});
+
+export const ModalDialog = defineComponent({
+  name: "ModalDialog",
+  props: { open: Boolean, title: String, subtitle: String },
+  emits: ["close"],
+  setup(props, { emit, slots }) {
+    const dialog = ref(null);
+    let restoreFocus = null;
+    const onKey = (e) => {
+      if (e.key === "Escape") emit("close");
+      else if (e.key === "Tab") trapFocus(dialog.value, e);
+    };
+    watch(
+      () => props.open,
+      async (open) => {
+        if (open) {
+          restoreFocus = document.activeElement;
+          document.addEventListener("keydown", onKey);
+          await nextTick();
+          if (dialog.value) {
+            const first = dialog.value.querySelector(FOCUSABLE);
+            (first || dialog.value).focus();
+          }
+        } else {
+          document.removeEventListener("keydown", onKey);
+          if (restoreFocus && typeof restoreFocus.focus === "function") restoreFocus.focus();
+          restoreFocus = null;
+        }
+      },
+    );
+    onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
+    return () => {
+      if (!props.open) return null;
+      return h("div", { class: "scrim modal-scrim", onClick: (e) => { if (e.target === e.currentTarget) emit("close"); } }, [
+        h("section", { ref: dialog, tabindex: "-1", class: "modal-card", role: "dialog", "aria-modal": "true", "aria-label": props.title || "确认" }, [
+          h("header", { class: "modal-head" }, [
+            h("div", null, [
+              h("h3", { class: "modal-title" }, props.title || ""),
+              props.subtitle ? h("div", { class: "small muted", style: { marginTop: "3px" } }, props.subtitle) : null,
+            ]),
+            h("button", { type: "button", class: "btn btn-quiet btn-sm", onClick: () => emit("close"), "aria-label": "关闭" }, [h(Icon, { name: "close", size: 15 })]),
+          ]),
+          h("div", { class: "modal-body" }, slots.default ? slots.default() : null),
+        ]),
+      ]);
+    };
+  },
+});
+
+export const ErrorBox = defineComponent({
+  name: "ErrorBox",
+  props: { text: { type: String, default: "读取失败" }, retryLabel: { type: String, default: "重试" } },
+  emits: ["retry"],
+  setup(props, { emit }) {
+    return () =>
+      h("div", { class: "empty error-state", role: "alert" }, [
+        h(Icon, { name: "alert", size: 18 }),
+        h("span", null, props.text),
+        h("button", { type: "button", class: "btn btn-ghost btn-sm", onClick: () => emit("retry") }, props.retryLabel),
+      ]);
   },
 });
 

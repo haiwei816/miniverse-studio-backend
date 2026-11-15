@@ -22,6 +22,7 @@ JSON 请求使用 Content-Type: application/json。会话通过 Authorization: B
 | POST /v1/games/{game}/events | event_id、event_type、amount；来源由服务端固定为 client |
 | POST /v1/games/{game}/activities/{activity}/reward | 对已完成活动补建幂等奖励；正常事件完成会自动生成 |
 | GET /v1/games/{game}/mail | 附件、过期、领取、read 状态；未删除的最近 200 封，支持 filter=all/unread/unclaimed 与 limit |
+| GET /v1/games/{game}/mail/page | ??????? filter?limit?cursor??? items ? next_cursor?????????? |
 | POST /v1/games/{game}/mail/{mail}/claim | 邮件领取与权威库存入账同一事务；重复返回成功 |
 | POST /v1/games/{game}/mail/{mail}/read | 标记已读，不领取附件 |
 | DELETE /v1/games/{game}/mail/{mail} | 软删除；有效未领附件返回409，过期或已领可删除 |
@@ -45,7 +46,7 @@ GM token 和玩家 token 完全分离。POST /gm/login 接受 username、passwor
 
 | GM 路径（前缀 /gm/games/{game}） | 行为 |
 |---|---|
-| GET /overview | 看板统计：玩家、在线、存档、待领邮件、活跃活动、有余额道具、待审申请、24h 审计/失败/发奖，以及 7 天（UTC 分桶）审计与发奖序列；全部为服务端计数 |
+| GET /overview | 看板统计：玩家、有效会话玩家、存档、待领邮件、活跃活动、有余额道具、待审申请、24h 审计/失败/发奖，以及 7 天（UTC 分桶）审计与发奖序列；全部为服务端计数。为兼容已有客户端，`totals.online` 字段名保持不变，表示具有未过期会话且拥有该游戏资料的不同玩家数，并非实时在线人数。 |
 | GET /players?q= | 按 UID/名称查询，最多 100 条 |
 | GET /players/{player} | 档案、存档槽版本、奖励流水、库存、最近50条库存流水和最近100封邮件（含删除状态） |
 | GET /audit | 最近 200 条管理写操作审计 |
