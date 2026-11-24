@@ -155,7 +155,7 @@ func (s *Service) savesRoutes(m *http.ServeMux) {
 			if _, e := tx.ExecContext(r.Context(), "UPDATE saves SET revision=?,schema_version=?,body=?,checksum=?,deleted=? WHERE game_id=? AND player_id=? AND slot=?", result.Revision, schema, body, result.Checksum, deleted, g, p, slot); e != nil {
 				return e
 			}
-			_, e := tx.ExecContext(r.Context(), "INSERT INTO save_history VALUES(?,?,?,?,?,?,?,?)", g, p, slot, result.Revision, schema, body, result.Checksum, deleted)
+			_, e := tx.ExecContext(r.Context(), "INSERT INTO save_history(game_id,player_id,slot,revision,schema_version,body,checksum,deleted) VALUES(?,?,?,?,?,?,?,?)", g, p, slot, result.Revision, schema, body, result.Checksum, deleted)
 			return e
 		})
 		return result, e

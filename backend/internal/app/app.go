@@ -27,7 +27,7 @@ func Run(cfg config.Config) error {
 	}
 	defer listener.Close()
 
-	db, err := database.Open(os.Getenv("MYSQL_DSN"))
+	db, err := database.Open(cfg.MySQLDSN)
 	if err != nil {
 		return fmt.Errorf("database configuration invalid")
 	}
@@ -35,8 +35,13 @@ func Run(cfg config.Config) error {
 	router := httpserver.NewRouter()
 	mux := http.NewServeMux()
 	mux.Handle("/", router)
-	svc := service.New(db, os.Getenv("APP_ENV") == "sandbox")
+	svc := service.New(db, cfg.IsSandbox())
 	svc.TrustedProxies = cfg.TrustedProxies
+	svc.RuleCoreAddr = cfg.RuleCoreAddr
+	svc.SandboxPlatformSecret = cfg.SandboxPlatformSecret
+	svc.CompanionChatURL = cfg.CompanionChatURL
+	svc.CompanionAPIKey = cfg.CompanionAPIKey
+	svc.CompanionModel = cfg.CompanionModel
 	defer svc.Close()
 	if err := svc.Initialize(); err != nil {
 		return err

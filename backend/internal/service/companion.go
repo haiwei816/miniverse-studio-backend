@@ -9,9 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -59,27 +57,23 @@ func validateCompanionHistory(history []companionMessage) error {
 	return nil
 }
 
-var companionTraffic = struct {
-	sync.Mutex
-	buckets   map[string]bucket
-	nextSweep time.Time
-	active    chan struct{}
-}{buckets: map[string]bucket{}, active: make(chan struct{}, 16)}
-
-func allowCompanionChat(player string, now time.Time) bool {
-	companionTraffic.Lock()
-	defer companionTraffic.Unlock()
-	if !now.Before(companionTraffic.nextSweep) {
-		for p, b := range companionTraffic.buckets {
+func (s *Service) allowCompanionChat(player string, now time.Time) bool {
+	s.companionMu.Lock()
+	defer s.companionMu.Unlock()
+	if s.companionLimits == nil {
+		s.companionLimits = map[string]bucket{}
+	}
+	if !now.Before(s.nextCompanionSweep) {
+		for p, b := range s.companionLimits {
 			if now.Sub(b.start) >= time.Minute {
-				delete(companionTraffic.buckets, p)
+				delete(s.companionLimits, p)
 			}
 		}
-		companionTraffic.nextSweep = now.Add(time.Minute)
+		s.nextCompanionSweep = now.Add(time.Minute)
 	}
-	b, exists := companionTraffic.buckets[player]
+	b, exists := s.companionLimits[player]
 	if !exists {
-		if len(companionTraffic.buckets) >= 10000 {
+		if len(s.companionLimits) >= 10000 {
 			return false
 		}
 		b = bucket{start: now}
@@ -90,7 +84,7 @@ func allowCompanionChat(player string, now time.Time) bool {
 		return false
 	}
 	b.n++
-	companionTraffic.buckets[player] = b
+	s.companionLimits[player] = b
 	return true
 }
 
@@ -98,7 +92,7 @@ func validCompanionStyle(style string) bool {
 	return style == "gentle" || style == "energetic" || style == "concise"
 }
 func (s *Service) companionChatMode() string {
-	if strings.TrimSpace(os.Getenv("COMPANION_CHAT_URL")) != "" {
+	if strings.TrimSpace(s.CompanionChatURL) != "" {
 		return "model"
 	}
 	if s.Sandbox {
@@ -454,12 +448,12 @@ func (s *Service) companionChat(r *http.Request) (any, error) {
 	return s.companionChatFor(r, p, "")
 }
 func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error) {
-	if !allowCompanionChat(p, time.Now()) {
+	if !s.allowCompanionChat(p, time.Now()) {
 		return nil, bad(429, "companion_rate_limited")
 	}
 	select {
-	case companionTraffic.active <- struct{}{}:
-		defer func() { <-companionTraffic.active }()
+	case s.companionActive <- struct{}{}:
+		defer func() { <-s.companionActive }()
 	default:
 		return nil, bad(503, "companion_busy")
 	}
@@ -498,7 +492,7 @@ func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error)
 	if game != "" && world.Game != game {
 		return nil, bad(409, "companion_context_changed")
 	}
-	endpoint := strings.TrimSpace(os.Getenv("COMPANION_CHAT_URL"))
+	endpoint := strings.TrimSpace(s.CompanionChatURL)
 	mode := "model"
 	reply := ""
 	if endpoint == "" {
@@ -515,7 +509,7 @@ func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error)
 		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(s.Sandbox && u.Scheme == "http")) {
 			return nil, bad(503, "companion_model_configuration_invalid")
 		}
-		reply, e = callCompanionModel(r.Context(), endpoint, os.Getenv("COMPANION_API_KEY"), os.Getenv("COMPANION_MODEL"), companionSystemPrompt(c, world, mem), b.Message, b.History...)
+		reply, e = callCompanionModel(r.Context(), endpoint, s.CompanionAPIKey, s.CompanionModel, companionSystemPrompt(c, world, mem), b.Message, b.History...)
 		if e != nil {
 			return nil, e
 		}

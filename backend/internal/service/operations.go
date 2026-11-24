@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -27,13 +28,30 @@ func (s *Service) validatePayload(r *http.Request, g, kind string, raw json.RawM
 		if n != 1 {
 			return bad(400, "unknown_item")
 		}
+		seen := make(map[string]struct{}, len(b.Players))
+		unique := make([]string, 0, len(b.Players))
 		for _, p := range b.Players {
-			if e := s.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM profiles WHERE game_id=? AND player_id=?", g, p).Scan(&n); e != nil {
-				return e
-			}
-			if n != 1 {
+			if p == "" {
 				return bad(400, "unknown_player")
 			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			unique = append(unique, p)
+		}
+		placeholders := make([]string, len(unique))
+		args := make([]any, 0, 1+len(unique))
+		args = append(args, g)
+		for i, p := range unique {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		if e := s.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM profiles WHERE game_id=? AND player_id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&n); e != nil {
+			return e
+		}
+		if n != len(unique) {
+			return bad(400, "unknown_player")
 		}
 	case "activity":
 		a, e := readActivity(raw)
@@ -183,10 +201,10 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 						if v.Version <= current {
 							return bad(409, "activity_version_conflict")
 						}
-						if _, e = tx.ExecContext(r.Context(), "INSERT INTO activity_versions VALUES(?,?,?,?)", a.Game, v.ID, v.Version, raw); e != nil {
+						if _, e = tx.ExecContext(r.Context(), "INSERT INTO activity_versions(game_id,id,version,config) VALUES(?,?,?,?)", a.Game, v.ID, v.Version, raw); e != nil {
 							return e
 						}
-						if _, e = tx.ExecContext(r.Context(), "INSERT INTO activities VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE version=VALUES(version),config=VALUES(config),active=TRUE", a.Game, v.ID, v.Version, raw); e != nil {
+						if _, e = tx.ExecContext(r.Context(), "INSERT INTO activities(game_id,id,version,config,active) VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE version=VALUES(version),config=VALUES(config),active=TRUE", a.Game, v.ID, v.Version, raw); e != nil {
 							return e
 						}
 					}
@@ -260,7 +278,7 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 			return nil, bad(400, "invalid_announcement")
 		}
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
-			if _, e := tx.ExecContext(r.Context(), "INSERT INTO announcements VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE body=VALUES(body),expires_at=VALUES(expires_at)", a.Game, r.PathValue("announcement"), b.Body, b.Expires); e != nil {
+			if _, e := tx.ExecContext(r.Context(), "INSERT INTO announcements(game_id,id,body,expires_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE body=VALUES(body),expires_at=VALUES(expires_at)", a.Game, r.PathValue("announcement"), b.Body, b.Expires); e != nil {
 				return e
 			}
 			return audit(r, tx, a, "announcement_updated", b.Reason, map[string]string{"id": r.PathValue("announcement")})

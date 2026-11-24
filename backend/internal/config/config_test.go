@@ -34,3 +34,74 @@ func TestLoad(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadExtendedDefaultsAndCompanionValidation(t *testing.T) {
+	cfg, err := load(func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatalf("unexpected default load error: %v", err)
+	}
+	if cfg.RuleCoreAddr != "rulecore:50051" || cfg.SandboxPlatformSecret != "local-sandbox-not-a-platform-key" || cfg.IsSandbox() {
+		t.Fatalf("unexpected extended defaults: %+v", cfg)
+	}
+
+	sandboxCfg, err := load(func(k string) (string, bool) {
+		v, ok := map[string]string{
+			"APP_ENV":            "sandbox",
+			"COMPANION_CHAT_URL": "http://127.0.0.1:11434/v1/chat/completions",
+			"COMPANION_MODEL":    "qwen",
+		}[k]
+		return v, ok
+	})
+	if err != nil || !sandboxCfg.IsSandbox() {
+		t.Fatalf("sandbox http companion rejected: cfg=%+v err=%v", sandboxCfg, err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		ok   bool
+	}{
+		{
+			name: "prod https companion with model",
+			env: map[string]string{
+				"APP_ENV":            "production",
+				"COMPANION_CHAT_URL": "https://api.example.com/v1/chat/completions",
+				"COMPANION_MODEL":    "gpt-4o-mini",
+			},
+			ok: true,
+		},
+		{
+			name: "prod http companion rejected",
+			env: map[string]string{
+				"APP_ENV":            "production",
+				"COMPANION_CHAT_URL": "http://api.example.com/v1/chat/completions",
+				"COMPANION_MODEL":    "gpt-4o-mini",
+			},
+			ok: false,
+		},
+		{
+			name: "companion url missing model rejected",
+			env: map[string]string{
+				"APP_ENV":            "sandbox",
+				"COMPANION_CHAT_URL": "https://api.example.com/v1/chat/completions",
+			},
+			ok: false,
+		},
+		{
+			name: "companion url with userinfo rejected",
+			env: map[string]string{
+				"APP_ENV":            "sandbox",
+				"COMPANION_CHAT_URL": "https://user:pass@api.example.com/v1/chat/completions",
+				"COMPANION_MODEL":    "gpt-4o-mini",
+			},
+			ok: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := load(func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok })
+			if (err == nil) != tc.ok {
+				t.Fatalf("got err=%v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}

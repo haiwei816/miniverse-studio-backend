@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"miniverse/backend/internal/database"
 	"net/http"
 	"time"
 )
@@ -74,11 +75,12 @@ func (s *Service) overviewRoutes(m *http.ServeMux) {
 		}
 
 		return map[string]any{
-			"game":         map[string]any{"id": a.Game, "name": name, "config_version": configVersion},
-			"role":         a.Role,
-			"generated_at": now.Unix(),
-			"totals":       totals,
-			"series":       map[string]any{"days": overviewWindow, "start": start.Unix(), "audits": audits, "grants": grants},
+			"game":           map[string]any{"id": a.Game, "name": name, "config_version": configVersion},
+			"schema_version": database.ExpectedSchemaVersion,
+			"role":           a.Role,
+			"generated_at":   now.Unix(),
+			"totals":         totals,
+			"series":         map[string]any{"days": overviewWindow, "start": start.Unix(), "audits": audits, "grants": grants},
 		}, nil
 	})
 }

@@ -63,9 +63,14 @@ export const SystemView = defineComponent({
     }
 
     function saveBase() {
-      setApiBase(base.value);
-      saved.value = true;
-      notify("接口地址已保存，刷新后生效", "success");
+      try {
+        base.value = setApiBase(base.value);
+        saved.value = true;
+        notify("接口地址已保存，刷新后生效", "success");
+      } catch (e) {
+        saved.value = false;
+        notify(errorText((e && e.code) || "invalid_api_base"), "error");
+      }
     }
 
     watch(

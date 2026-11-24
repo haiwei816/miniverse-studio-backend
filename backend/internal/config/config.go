@@ -5,15 +5,27 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	HTTPHost       string
-	HTTPPort       int
-	TrustedProxies []netip.Prefix
+	HTTPHost              string
+	HTTPPort              int
+	TrustedProxies        []netip.Prefix
+	MySQLDSN              string
+	AppEnv                string
+	RuleCoreAddr          string
+	SandboxPlatformSecret string
+	CompanionChatURL      string
+	CompanionAPIKey       string
+	CompanionModel        string
+}
+
+func (c Config) IsSandbox() bool {
+	return c.AppEnv == "sandbox"
 }
 
 func Load() (Config, error) {
@@ -21,7 +33,12 @@ func Load() (Config, error) {
 }
 
 func load(lookup func(string) (string, bool)) (Config, error) {
-	cfg := Config{HTTPHost: "127.0.0.1", HTTPPort: 8080}
+	cfg := Config{
+		HTTPHost:              "127.0.0.1",
+		HTTPPort:              8080,
+		RuleCoreAddr:          "rulecore:50051",
+		SandboxPlatformSecret: "local-sandbox-not-a-platform-key",
+	}
 	if host, ok := lookup("HTTP_HOST"); ok {
 		cfg.HTTPHost = host
 	}
@@ -47,6 +64,27 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 			cfg.TrustedProxies = append(cfg.TrustedProxies, prefix.Masked())
 		}
 	}
+	if dsn, ok := lookup("MYSQL_DSN"); ok {
+		cfg.MySQLDSN = dsn
+	}
+	if env, ok := lookup("APP_ENV"); ok {
+		cfg.AppEnv = strings.TrimSpace(env)
+	}
+	if addr, ok := lookup("RULECORE_ADDR"); ok && strings.TrimSpace(addr) != "" {
+		cfg.RuleCoreAddr = strings.TrimSpace(addr)
+	}
+	if secret, ok := lookup("SANDBOX_PLATFORM_SECRET"); ok && secret != "" {
+		cfg.SandboxPlatformSecret = secret
+	}
+	if chatURL, ok := lookup("COMPANION_CHAT_URL"); ok {
+		cfg.CompanionChatURL = strings.TrimSpace(chatURL)
+	}
+	if apiKey, ok := lookup("COMPANION_API_KEY"); ok {
+		cfg.CompanionAPIKey = apiKey
+	}
+	if model, ok := lookup("COMPANION_MODEL"); ok {
+		cfg.CompanionModel = strings.TrimSpace(model)
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -64,6 +102,15 @@ func (c Config) Validate() error {
 	for _, prefix := range c.TrustedProxies {
 		if !prefix.IsValid() {
 			return errors.New("invalid trusted proxy prefix")
+		}
+	}
+	if c.CompanionChatURL != "" {
+		u, err := url.Parse(c.CompanionChatURL)
+		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(c.IsSandbox() && u.Scheme == "http")) {
+			return errors.New("COMPANION_CHAT_URL must be an https URL without userinfo (http allowed only in sandbox)")
+		}
+		if c.CompanionModel == "" {
+			return errors.New("COMPANION_MODEL must be set when COMPANION_CHAT_URL is configured")
 		}
 	}
 	return nil

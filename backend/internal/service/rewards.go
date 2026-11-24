@@ -20,10 +20,10 @@ func grant(ctx context.Context, tx *sql.Tx, g, p, key, item string, amount int64
 		return bad(400, "unknown_item")
 	}
 	id := hash(g + "/" + p + "/" + key)[:48]
-	if _, e := tx.ExecContext(ctx, "INSERT IGNORE INTO grants VALUES(?,?,?,?,?,?,?)", id, g, p, key, item, amount, time.Now().Unix()); e != nil {
+	if _, e := tx.ExecContext(ctx, "INSERT IGNORE INTO grants(id,game_id,player_id,business_key,item,amount,created_at) VALUES(?,?,?,?,?,?,?)", id, g, p, key, item, amount, time.Now().Unix()); e != nil {
 		return e
 	}
-	_, e := tx.ExecContext(ctx, "INSERT IGNORE INTO mail VALUES(?,?,?,?,?,?,FALSE)", id, g, p, id, "奖励到账", time.Now().Add(30*24*time.Hour).Unix())
+	_, e := tx.ExecContext(ctx, "INSERT IGNORE INTO mail(id,game_id,player_id,grant_id,title,expires_at,claimed) VALUES(?,?,?,?,?,?,FALSE)", id, g, p, id, "奖励到账", time.Now().Add(30*24*time.Hour).Unix())
 	return e
 }
 func (s *Service) rewardRoutes(m *http.ServeMux) {

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"miniverse/backend/internal/platformauth"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -12,7 +11,7 @@ func (s *Service) adapter(channel string) (platformauth.Sandbox, error) {
 	if channel != "steam" && channel != "taptap" {
 		return platformauth.Sandbox{}, bad(400, "unknown_channel")
 	}
-	key := os.Getenv("SANDBOX_PLATFORM_SECRET")
+	key := s.SandboxPlatformSecret
 	if key == "" {
 		key = "local-sandbox-not-a-platform-key"
 	}
@@ -74,7 +73,7 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 			}
 			token := random()
 			e = s.transaction(r.Context(), func(tx *sql.Tx) error {
-				res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO platform_nonces VALUES(?,?)", v.Nonce, v.Expires)
+				res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO platform_nonces(nonce,expires_at) VALUES(?,?)", v.Nonce, v.Expires)
 				if e != nil {
 					return e
 				}
@@ -95,15 +94,15 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 				} else {
 					if action == "login" {
 						player = random()
-						if _, e = tx.ExecContext(r.Context(), "INSERT INTO accounts VALUES(?,?)", player, hash(random())); e != nil {
+						if _, e = tx.ExecContext(r.Context(), "INSERT INTO accounts(id,secret_hash) VALUES(?,?)", player, hash(random())); e != nil {
 							return e
 						}
 					}
-					if _, e = tx.ExecContext(r.Context(), "INSERT INTO platform_identities VALUES(?,?,?,?)", v.Channel, v.App, v.Subject, player); e != nil {
+					if _, e = tx.ExecContext(r.Context(), "INSERT INTO platform_identities(channel,app_id,subject,player_id) VALUES(?,?,?,?)", v.Channel, v.App, v.Subject, player); e != nil {
 						return e
 					}
 				}
-				_, e = tx.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", s.sessionHash(token), player, time.Now().Add(time.Hour).Unix())
+				_, e = tx.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", s.sessionHash(token), player, time.Now().Add(time.Hour).Unix())
 				return e
 			})
 			return map[string]any{"player_id": player, "access_token": token, "adapter": "sandbox", "real_platform": "unverified"}, e
@@ -144,7 +143,7 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 			if count < 2 {
 				return bad(409, "last_identity_cannot_unbind")
 			}
-			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO platform_nonces VALUES(?,?)", v.Nonce, v.Expires)
+			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO platform_nonces(nonce,expires_at) VALUES(?,?)", v.Nonce, v.Expires)
 			if e != nil {
 				return e
 			}

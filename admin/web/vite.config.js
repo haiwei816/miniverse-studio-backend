@@ -9,6 +9,9 @@ export default defineConfig({
   resolve: { alias: { vue: "vue/dist/vue.esm-bundler.js" } },
   server: {
     port: 5173,
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
     proxy: {
       "/gm": API,
       "/v1": API,

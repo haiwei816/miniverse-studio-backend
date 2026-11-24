@@ -36,10 +36,10 @@ func TestMemorySteadyState(t *testing.T) {
 	}
 	defer db.Close()
 	id, token := random(), random()
-	if _, e = db.Exec("INSERT INTO accounts VALUES(?,?)", id, hash(random())); e != nil {
+	if _, e = db.Exec("INSERT INTO accounts(id,secret_hash) VALUES(?,?)", id, hash(random())); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = db.Exec("INSERT INTO sessions VALUES(?,?,?)", hash(token), id, time.Now().Add(time.Hour).Unix()); e != nil {
+	if _, e = db.Exec("INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", hash(token), id, time.Now().Add(time.Hour).Unix()); e != nil {
 		t.Fatal(e)
 	}
 	defer func() {

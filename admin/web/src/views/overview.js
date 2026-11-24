@@ -32,10 +32,13 @@ export const OverviewView = defineComponent({
       { key: "b", name: "发奖记录", points: series.value.grants || [] },
     ]);
 
-    async function loadHealth() {
+    async function loadHealth(signal) {
+      const abortSignal = signal && typeof signal.aborted === "boolean" ? signal : undefined;
       healthLoading.value = true;
       try {
-        health.value = await probeHealth();
+        health.value = await probeHealth({ signal: abortSignal });
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
       } finally {
         healthLoading.value = false;
       }
@@ -56,7 +59,7 @@ export const OverviewView = defineComponent({
       activeAbort = new AbortController();
       loading.value = true;
       failure.value = "";
-      const healthTask = loadHealth();
+      const healthTask = loadHealth(activeAbort.signal);
       try {
         const [overview, auditRows, requestRows] = await Promise.all([
           request(`/gm/games/${encodeURIComponent(targetGame)}/overview`, { signal: activeAbort.signal }),
@@ -219,7 +222,7 @@ export const OverviewView = defineComponent({
         <article class="card">
           <div class="card-head">
             <div class="card-title">服务状态</div>
-            <button type="button" class="link-btn" :disabled="healthLoading" @click="loadHealth">{{ healthLoading ? '探测中…' : '重新探测' }}</button>
+            <button type="button" class="link-btn" :disabled="healthLoading" @click="loadHealth()">{{ healthLoading ? '探测中…' : '重新探测' }}</button>
           </div>
           <div class="card-body">
             <div class="list">
@@ -234,7 +237,7 @@ export const OverviewView = defineComponent({
                 <span class="pill" :data-tone="readyBadge.tone">{{ readyBadge.label }}</span>
                 <div class="list-main">
                   <div class="list-title">数据库与迁移</div>
-                  <div class="list-meta">{{ health && health.readyDetail ? health.readyDetail : 'GET /ready' }} · {{ data ? '迁移版本 v' + data.game.config_version : '—' }}</div>
+                  <div class="list-meta">{{ health && health.readyDetail ? health.readyDetail : 'GET /ready' }} · {{ data && data.schema_version ? '迁移版本 v' + data.schema_version : '—' }}</div>
                 </div>
               </div>
             </div>

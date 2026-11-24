@@ -64,7 +64,7 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 			return nil, e
 		}
 		raw, _ := json.Marshal(a)
-		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO activities VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE config=IF(VALUES(version)>version,VALUES(config),config),version=GREATEST(version,VALUES(version))", g, a.ID, a.Version, raw)
+		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO activities(game_id,id,version,config,active) VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE config=IF(VALUES(version)>version,VALUES(config),config),version=GREATEST(version,VALUES(version))", g, a.ID, a.Version, raw)
 		return a, e
 	})
 	s.handle(m, "GET /v1/games/{game}/activities", func(r *http.Request) (any, error) {
@@ -95,13 +95,36 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
-		out := []any{}
-		for _, a := range configs {
-			var n int64
-			e = s.DB.QueryRowContext(r.Context(), "SELECT progress FROM activity_progress WHERE game_id=? AND player_id=? AND activity_id=? AND version=? AND bucket=?", g, p, a.ID, a.Version, bucketFor(a, time.Now())).Scan(&n)
-			if e != nil && e != sql.ErrNoRows {
+		type progressKey struct {
+			id      string
+			version int
+			bucket  string
+		}
+		now := time.Now()
+		progressMap := map[progressKey]int64{}
+		if len(configs) > 0 {
+			pRows, e := s.DB.QueryContext(r.Context(), "SELECT activity_id,version,bucket,progress FROM activity_progress WHERE game_id=? AND player_id=? AND bucket IN ('all',?)", g, p, now.UTC().Format("2006-01-02"))
+			if e != nil {
 				return nil, e
 			}
+			for pRows.Next() {
+				var k progressKey
+				var n int64
+				if e = pRows.Scan(&k.id, &k.version, &k.bucket, &n); e != nil {
+					pRows.Close()
+					return nil, e
+				}
+				progressMap[k] = n
+			}
+			e = pRows.Err()
+			pRows.Close()
+			if e != nil {
+				return nil, e
+			}
+		}
+		out := []any{}
+		for _, a := range configs {
+			n := progressMap[progressKey{id: a.ID, version: a.Version, bucket: bucketFor(a, now)}]
 			out = append(out, map[string]any{"config": a, "progress": n, "complete": n >= a.Target})
 		}
 		return out, nil
@@ -124,7 +147,7 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 		}
 		duplicate := false
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
-			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO events VALUES(?,?,?,?,?,'client',?)", g, p, b.ID, b.Type, b.Amount, time.Now().Unix())
+			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO events(game_id,player_id,event_id,event_type,amount,source,created_at) VALUES(?,?,?,?,?,'client',?)", g, p, b.ID, b.Type, b.Amount, time.Now().Unix())
 			if e != nil {
 				return e
 			}
@@ -165,7 +188,7 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 				if a.Kind == "signin" {
 					amount = 1
 				}
-				_, e = tx.ExecContext(r.Context(), "INSERT INTO activity_progress VALUES(?,?,?,?,?,LEAST(?,?)) ON DUPLICATE KEY UPDATE progress=LEAST(?,progress+?)", g, p, a.ID, a.Version, bucketFor(a, now), amount, a.Target, a.Target, amount)
+				_, e = tx.ExecContext(r.Context(), "INSERT INTO activity_progress(game_id,player_id,activity_id,version,bucket,progress) VALUES(?,?,?,?,?,LEAST(?,?)) ON DUPLICATE KEY UPDATE progress=LEAST(?,progress+?)", g, p, a.ID, a.Version, bucketFor(a, now), amount, a.Target, a.Target, amount)
 				if e != nil {
 					return e
 				}

@@ -58,17 +58,18 @@ func TestCompanionModelRejectsRedirectAndMalformedReply(t *testing.T) {
 }
 
 func TestCompanionRateAndContextBoundaries(t *testing.T) {
+	s := New(nil, true)
 	p := random()
 	now := time.Now()
 	for i := 0; i < 30; i++ {
-		if !allowCompanionChat(p, now) {
+		if !s.allowCompanionChat(p, now) {
 			t.Fatal("unexpected early limit")
 		}
 	}
-	if allowCompanionChat(p, now) {
+	if s.allowCompanionChat(p, now) {
 		t.Fatal("chat quota exceeded")
 	}
-	if !allowCompanionChat(p, now.Add(time.Minute)) {
+	if !s.allowCompanionChat(p, now.Add(time.Minute)) {
 		t.Fatal("quota did not expire")
 	}
 	for _, v := range []companionContext{{Epoch: 0}, {Epoch: 1, Scene: strings.Repeat("界", 129)}, {Epoch: 1, Quest: strings.Repeat("界", 257)}, {Epoch: 1, Targets: make([]string, 21)}} {

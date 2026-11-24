@@ -1,0 +1,21 @@
+-- MySQL DDL commits implicitly. Check each index so interruption can be retried.
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='audits' AND index_name='audits_game_created_action')=0, 'CREATE INDEX audits_game_created_action ON audits(game_id,created_at,action)', 'DO 0');
+PREPARE overview_idx_stmt FROM @ddl;
+EXECUTE overview_idx_stmt;
+DEALLOCATE PREPARE overview_idx_stmt;
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='grants' AND index_name='grants_game_created')=0, 'CREATE INDEX grants_game_created ON grants(game_id,created_at)', 'DO 0');
+PREPARE overview_idx_stmt FROM @ddl;
+EXECUTE overview_idx_stmt;
+DEALLOCATE PREPARE overview_idx_stmt;
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='gm_requests' AND index_name='gm_requests_game_state_created')=0, 'CREATE INDEX gm_requests_game_state_created ON gm_requests(game_id,state,created_at)', 'DO 0');
+PREPARE overview_idx_stmt FROM @ddl;
+EXECUTE overview_idx_stmt;
+DEALLOCATE PREPARE overview_idx_stmt;
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='mail' AND index_name='mail_game_claimed_expires')=0, 'CREATE INDEX mail_game_claimed_expires ON mail(game_id,claimed,expires_at)', 'DO 0');
+PREPARE overview_idx_stmt FROM @ddl;
+EXECUTE overview_idx_stmt;
+DEALLOCATE PREPARE overview_idx_stmt;
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='mail' AND index_name='mail_game_player_claimed_expires')=0, 'CREATE INDEX mail_game_player_claimed_expires ON mail(game_id,player_id,claimed,expires_at)', 'DO 0');
+PREPARE overview_idx_stmt FROM @ddl;
+EXECUTE overview_idx_stmt;
+DEALLOCATE PREPARE overview_idx_stmt;

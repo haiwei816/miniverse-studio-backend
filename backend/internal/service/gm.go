@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -25,10 +26,10 @@ func (s *Service) seedGM() error {
 	}
 	for _, v := range []struct{ id, role string }{{"admin", "admin"}, {"reviewer", "reviewer"}, {"support", "support"}, {"operator", "operator"}} {
 		salt := "sandbox-fixture-" + v.id
-		if _, e := s.DB.Exec("INSERT IGNORE INTO admins VALUES(?,?,?,?)", v.id, passwordHash("sandbox-"+v.id, salt), salt, v.role); e != nil {
+		if _, e := s.DB.Exec("INSERT IGNORE INTO admins(id,password_hash,salt,role) VALUES(?,?,?,?)", v.id, passwordHash("sandbox-"+v.id, salt), salt, v.role); e != nil {
 			return e
 		}
-		if _, e := s.DB.Exec("INSERT IGNORE INTO gm_access VALUES(?,'sky-island')", v.id); e != nil {
+		if _, e := s.DB.Exec("INSERT IGNORE INTO gm_access(admin_id,game_id) VALUES(?,'sky-island')", v.id); e != nil {
 			return e
 		}
 		if v.role == "admin" || v.role == "operator" || v.role == "reviewer" {
@@ -94,19 +95,37 @@ func (s *Service) gmRoutes(m *http.ServeMux) {
 		if e := decode(r, &b); e != nil {
 			return nil, e
 		}
-		var expected, salt, role string
-		if e := s.DB.QueryRowContext(r.Context(), "SELECT password_hash,salt,role FROM admins WHERE id=?", b.Username).Scan(&expected, &salt, &role); e != nil {
+		username := strings.TrimSpace(b.Username)
+		if !s.allowGMAuth(clientIP(r, s.TrustedProxies), username, time.Now()) {
+			return nil, bad(429, "auth_rate_limited")
+		}
+		if username == "" || len(username) > 64 || len(b.Password) == 0 || len(b.Password) > 128 {
 			return nil, bad(401, "invalid_credentials")
+		}
+		var expected, salt, role string
+		e := s.DB.QueryRowContext(r.Context(), "SELECT password_hash,salt,role FROM admins WHERE id=?", username).Scan(&expected, &salt, &role)
+		if errors.Is(e, sql.ErrNoRows) {
+			if _, hashErr := s.platformPasswordHash(b.Password, "missing-gm-account"); hashErr != nil {
+				return nil, hashErr
+			}
+			return nil, bad(401, "invalid_credentials")
+		}
+		if e != nil {
+			return nil, e
 		}
 		if !s.Sandbox && strings.HasPrefix(salt, "sandbox-fixture-") {
 			return nil, bad(403, "sandbox_admin_disabled")
 		}
-		if subtle.ConstantTimeCompare([]byte(expected), []byte(passwordHash(b.Password, salt))) != 1 {
+		derived, hashErr := s.platformPasswordHash(b.Password, salt)
+		if hashErr != nil {
+			return nil, hashErr
+		}
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(derived)) != 1 {
 			return nil, bad(401, "invalid_credentials")
 		}
 		token := random()
-		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO gm_sessions VALUES(?,?,?)", hash("Bearer "+token), b.Username, time.Now().Add(30*time.Minute).Unix())
-		return map[string]any{"access_token": token, "role": role, "username": b.Username}, e
+		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO gm_sessions(token_hash,admin_id,expires_at) VALUES(?,?,?)", hash("Bearer "+token), username, time.Now().Add(30*time.Minute).Unix())
+		return map[string]any{"access_token": token, "role": role, "username": username}, e
 	})
 	s.handle(m, "GET /gm/games", func(r *http.Request) (any, error) {
 		a, e := s.gmSession(r)

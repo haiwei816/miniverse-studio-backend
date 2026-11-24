@@ -33,7 +33,16 @@ fn action(app: &AppHandle, name: &str) {
 }
 
 pub fn run() {
-    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyG);
+    #[cfg(target_os = "macos")]
+    let (shortcut, accel) = (
+        Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyG),
+        "Cmd+Shift+G",
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (shortcut, accel) = (
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyG),
+        "Ctrl+Shift+G",
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
@@ -47,10 +56,16 @@ pub fn run() {
                 })
                 .build(),
         )
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
-            let handle = app.handle().clone();
-
-            let open = MenuItem::with_id(app, "open", "打开控制台", true, Some("Ctrl+Shift+G"))?;
+            let open = MenuItem::with_id(app, "open", "打开控制台", true, Some(accel))?;
             let award = MenuItem::with_id(app, "award", "补发奖励…", true, None::<&str>)?;
             let refresh = MenuItem::with_id(app, "refresh", "刷新数据", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
@@ -84,7 +99,6 @@ pub fn run() {
             tray.build(app)?;
 
             app.global_shortcut().register(shortcut)?;
-            let _ = handle;
             Ok(())
         })
         .run(tauri::generate_context!())

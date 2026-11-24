@@ -120,7 +120,7 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 					if _, e := tx.ExecContext(r.Context(), "INSERT INTO accounts(id,secret_hash) VALUES(?,?)", id, hash(random())); e != nil {
 						return e
 					}
-					_, e := tx.ExecContext(r.Context(), "INSERT INTO platform_credentials VALUES(?,?,?,?,?)", id, b.Username, encoded, salt, time.Now().Unix())
+					_, e := tx.ExecContext(r.Context(), "INSERT INTO platform_credentials(player_id,username,password_hash,salt,created_at) VALUES(?,?,?,?,?)", id, b.Username, encoded, salt, time.Now().Unix())
 					return e
 				})
 				var me *mysql.MySQLError
@@ -152,7 +152,7 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 			}
 			token := random()
 			expiry := time.Now().Add(24 * time.Hour).Unix()
-			_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", s.sessionHash(token), id, expiry)
+			_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", s.sessionHash(token), id, expiry)
 			return map[string]any{"player_id": id, "username": b.Username, "access_token": token, "expires_at": expiry}, e
 		})
 	}

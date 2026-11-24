@@ -21,19 +21,28 @@ import (
 )
 
 type Service struct {
-	DB             *sql.DB
-	Sandbox        bool
-	TrustedProxies []netip.Prefix
-	mu             sync.Mutex
-	limits         map[string]bucket
-	nextLimitSweep time.Time
-	authMu         sync.Mutex
-	authLimits     map[string]bucket
-	nextAuthSweep  time.Time
-	authHashes     chan struct{}
-	ruleMu         sync.Mutex
-	ruleAddr       string
-	ruleConn       *grpc.ClientConn
+	DB                    *sql.DB
+	Sandbox               bool
+	TrustedProxies        []netip.Prefix
+	RuleCoreAddr          string
+	SandboxPlatformSecret string
+	CompanionChatURL      string
+	CompanionAPIKey       string
+	CompanionModel        string
+	mu                    sync.Mutex
+	limits                map[string]bucket
+	nextLimitSweep        time.Time
+	authMu                sync.Mutex
+	authLimits            map[string]bucket
+	nextAuthSweep         time.Time
+	authHashes            chan struct{}
+	companionMu           sync.Mutex
+	companionLimits       map[string]bucket
+	nextCompanionSweep    time.Time
+	companionActive       chan struct{}
+	ruleMu                sync.Mutex
+	ruleAddr              string
+	ruleConn              *grpc.ClientConn
 }
 
 func (s *Service) Close() error {
@@ -60,7 +69,17 @@ type Problem struct {
 func (p Problem) Error() string { return p.Code }
 func bad(s int, c string) error { return Problem{s, c} }
 func New(db *sql.DB, sandbox bool) *Service {
-	return &Service{DB: db, Sandbox: sandbox, limits: map[string]bucket{}, authLimits: map[string]bucket{}, authHashes: make(chan struct{}, 4)}
+	return &Service{
+		DB:                    db,
+		Sandbox:               sandbox,
+		RuleCoreAddr:          "rulecore:50051",
+		SandboxPlatformSecret: "local-sandbox-not-a-platform-key",
+		limits:                map[string]bucket{},
+		authLimits:            map[string]bucket{},
+		authHashes:            make(chan struct{}, 4),
+		companionLimits:       map[string]bucket{},
+		companionActive:       make(chan struct{}, 16),
+	}
 }
 func random() string {
 	b := make([]byte, 24)

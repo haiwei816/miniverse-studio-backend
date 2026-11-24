@@ -15,7 +15,7 @@ docker compose -f deploy/compose.yaml --profile player --profile gm up -d --buil
 - API：`http://127.0.0.1:18080`。
 - `PLAYER_PORT`、`GM_PORT`、`API_PORT` 可以修改映射端口。已有独立测试环境时应使用一致的 Compose 项目名和端口。
 
-数据库迁移必须先完成，不能将旧数据库直接连到新 API 而跳过迁移。当前最高迁移为 017；保留以前的数据卷及已应用迁移文件。
+数据库迁移必须先完成，不能将旧数据库直接连到新 API 而跳过迁移。当前最高迁移为 019；保留以前的数据卷及已应用迁移文件。
 
 开发前端：
 

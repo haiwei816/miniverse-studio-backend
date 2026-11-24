@@ -180,7 +180,7 @@ func (s *Service) plannerRoutes(m *http.ServeMux) {
 		}
 		sim := simulate(v, []SimulationEvent{{Amount: min(v.Target, 100000), Time: time.Now().Unix()}})
 		latency := time.Since(start).Milliseconds()
-		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO planner_runs VALUES(?,?,?,'deterministic_mock',?,TRUE,?,?,0,?)", id, a.Game, a.ID, raw, attempts, latency, time.Now().Unix())
+		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO planner_runs(id,game_id,admin_id,provider,config,valid,attempts,latency_ms,cost_usd,created_at) VALUES(?,?,?,'deterministic_mock',?,TRUE,?,?,0,?)", id, a.Game, a.ID, raw, attempts, latency, time.Now().Unix())
 		return map[string]any{"run_id": id, "config": json.RawMessage(raw), "valid": true, "simulation": sim, "attempts": attempts, "first_pass": firstPass, "latency_ms": latency, "cost_usd": 0, "provider": "deterministic_mock", "review_status": "draft", "real_ai": "unverified"}, e
 	})
 	s.handle(m, "GET "+base+"/runs", func(r *http.Request) (any, error) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"miniverse/backend/internal/database"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,10 +112,11 @@ func TestOverviewCountsAreServerSide(t *testing.T) {
 	}
 
 	var got struct {
-		Game   map[string]any   `json:"game"`
-		Role   string           `json:"role"`
-		Totals map[string]int64 `json:"totals"`
-		Series struct {
+		Game          map[string]any   `json:"game"`
+		SchemaVersion int              `json:"schema_version"`
+		Role          string           `json:"role"`
+		Totals        map[string]int64 `json:"totals"`
+		Series        struct {
 			Days   int           `json:"days"`
 			Audits []overviewDay `json:"audits"`
 			Grants []overviewDay `json:"grants"`
@@ -125,6 +127,9 @@ func TestOverviewCountsAreServerSide(t *testing.T) {
 	}
 	if got.Game["name"] != "天空岛物语" || got.Game["config_version"] != float64(4) {
 		t.Fatalf("game header: %+v", got.Game)
+	}
+	if got.SchemaVersion != database.ExpectedSchemaVersion {
+		t.Fatalf("schema_version = %d, want %d", got.SchemaVersion, database.ExpectedSchemaVersion)
 	}
 	if got.Role != "admin" {
 		t.Fatalf("role: %q", got.Role)

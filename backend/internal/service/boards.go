@@ -61,7 +61,7 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 		if b.ID == "" || len(b.ID) > 64 || b.Season == "" || len(b.Season) > 64 || b.Starts >= b.Ends || (b.Mode != "max" && b.Mode != "min" && b.Mode != "sum") || b.Reward < 0 || b.Reward > 1000000 {
 			return nil, bad(400, "invalid_board")
 		}
-		_, e = s.DB.ExecContext(r.Context(), "INSERT IGNORE INTO boards VALUES(?,?,?,?,?,?,FALSE,FALSE,?,?)", g, b.ID, b.Season, b.Mode, b.Starts, b.Ends, b.Item, b.Reward)
+		_, e = s.DB.ExecContext(r.Context(), "INSERT IGNORE INTO boards(game_id,id,season,mode,starts_at,ends_at,frozen,settled,item,reward_amount) VALUES(?,?,?,?,?,?,FALSE,FALSE,?,?)", g, b.ID, b.Season, b.Mode, b.Starts, b.Ends, b.Item, b.Reward)
 		return b, e
 	})
 	s.handle(m, "POST "+base+"/scores", func(r *http.Request) (any, error) {
@@ -91,14 +91,14 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 			var mode string
 			var start, end int64
 			var frozen bool
-			if e := tx.QueryRowContext(r.Context(), "SELECT mode,starts_at,ends_at,frozen FROM boards WHERE game_id=? AND id=? AND season=? FOR UPDATE", g, id, season).Scan(&mode, &start, &end, &frozen); e != nil {
+			if e := tx.QueryRowContext(r.Context(), "SELECT mode,starts_at,ends_at,frozen FROM boards WHERE game_id=? AND id=? AND season=? FOR SHARE", g, id, season).Scan(&mode, &start, &end, &frozen); e != nil {
 				return bad(404, "board_not_found")
 			}
 			now := time.Now()
 			if frozen || now.Unix() < start || now.Unix() >= end {
 				return bad(409, "season_closed")
 			}
-			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO score_events VALUES(?,?,?,?,?)", g, id, season, p, b.ID)
+			res, e := tx.ExecContext(r.Context(), "INSERT IGNORE INTO score_events(game_id,board_id,season,player_id,request_id) VALUES(?,?,?,?,?)", g, id, season, p, b.ID)
 			if e != nil {
 				return e
 			}
@@ -129,7 +129,7 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 					}
 				}
 			}
-			_, e = tx.ExecContext(r.Context(), "INSERT INTO scores VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, id, season, p, next, now.UnixNano())
+			_, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, id, season, p, next, now.UnixNano())
 			return e
 		})
 		return map[string]any{"ok": true, "trust": "client_unverified"}, e

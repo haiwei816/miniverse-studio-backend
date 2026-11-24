@@ -1,6 +1,6 @@
 # MiniVerse Studio Backend
 
-Go 模块化单体 + MySQL 的多游戏工作室后端 MVP。基于原仓库 S0.1 增量实现，按 S0→S12 顺序执行并记录验收。包含 Godot 4 SDK、两游戏接入示例、Vue3 + Element Plus GM、审批审计、sandbox 渠道身份、mock 活动策划和可选 C++20/gRPC 规则服务。
+Go 模块化单体 + MySQL 的多游戏工作室后端 MVP。基于原仓库 S0.1 增量实现，按 S0→S12 顺序执行并记录验收。包含 Godot 4 SDK、两游戏接入示例、Vue 3 GM 控制台（含 Tauri 2 桌面端）、审批审计、sandbox 渠道身份、mock 活动策划和可选 C++20/gRPC 规则服务。
 
 **本地 MVP，不代表已上线。Steam/TapTap 真实认证与真实 AI 模型均未验证。** 详细结果以 [验收记录](docs/verification/RESULTS.md) 为准，不能把 sandbox 通过当作平台正式验收。
 

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { probeHealth } from "./api.js";
+import { validateApiBase } from "./desktop.js";
 
 test("probeHealth reports ok when both /health and /ready return JSON ok/ready", async () => {
   const originalFetch = globalThis.fetch;
@@ -63,5 +64,37 @@ test("probeHealth reports offline on network error", async () => {
     assert.equal(res.readyState, "offline");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("probeHealth forwards AbortSignal to fetch", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  const signals = [];
+  globalThis.fetch = async (_path, init) => {
+    signals.push(init && init.signal);
+    return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+  };
+  try {
+    await probeHealth({ signal: controller.signal });
+    assert.deepEqual(signals, [controller.signal, controller.signal]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("validateApiBase restricts desktop API base to local loopback ports", () => {
+  assert.equal(validateApiBase("http://127.0.0.1:18080"), "http://127.0.0.1:18080");
+  assert.equal(validateApiBase(" http://localhost:18081/ "), "http://localhost:18081");
+  for (const bad of [
+    "",
+    "https://evil.example",
+    "http://192.168.1.5:18080",
+    "http://user:pass@127.0.0.1:18080",
+    "http://127.0.0.1:18080/gm",
+    "http://127.0.0.1:9090",
+    "http://127.0.0.1:18080/?x=1",
+  ]) {
+    assert.throws(() => validateApiBase(bad), (err) => err && err.code === "invalid_api_base", `accepted ${bad}`);
   }
 });

@@ -58,7 +58,7 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 		secret := b.Secret
 		if secret == "" {
 			secret = random()
-			if _, e := s.DB.ExecContext(r.Context(), "INSERT INTO accounts VALUES(?,?)", id, hash(secret)); e != nil {
+			if _, e := s.DB.ExecContext(r.Context(), "INSERT INTO accounts(id,secret_hash) VALUES(?,?)", id, hash(secret)); e != nil {
 				return nil, e
 			}
 		} else {
@@ -68,7 +68,7 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 		}
 		token := random()
 		exp := time.Now().Add(time.Hour).Unix()
-		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions VALUES(?,?,?)", s.sessionHash(token), id, exp)
+		_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", s.sessionHash(token), id, exp)
 		return map[string]any{"player_id": id, "secret": secret, "access_token": token, "expires_at": exp, "adapter": "sandbox"}, e
 	})
 	s.handle(m, "POST /v1/auth/logout", func(r *http.Request) (any, error) {

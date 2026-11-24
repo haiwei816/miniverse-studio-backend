@@ -46,6 +46,7 @@ export async function request(path, { method = "GET", body, expectJson = false, 
             ...(token ? { Authorization: "Bearer " + token } : {}),
           },
           body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
         })
       : await fetch(path, {
           method,
@@ -76,11 +77,13 @@ export async function request(path, { method = "GET", body, expectJson = false, 
   return payload;
 }
 
-export async function probeHealth() {
+export async function probeHealth({ signal } = {}) {
   const [h, r] = await Promise.allSettled([
-    request("/health", { expectJson: true }),
-    request("/ready", { expectJson: true }),
+    request("/health", { expectJson: true, signal }),
+    request("/ready", { expectJson: true, signal }),
   ]);
+  if (h.status === "rejected" && h.reason && h.reason.name === "AbortError") throw h.reason;
+  if (r.status === "rejected" && r.reason && r.reason.name === "AbortError") throw r.reason;
   let apiState = "probe_failed";
   let apiDetail = "";
   if (h.status === "fulfilled") {

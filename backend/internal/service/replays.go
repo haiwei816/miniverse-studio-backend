@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"miniverse/backend/internal/rulepb"
 	"net/http"
-	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -52,7 +52,7 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 		if g != "card-game" || b.Version != "card-v1" || b.Seed == 0 || len(b.Actions) < 1 || len(b.Actions) > 128 || len(b.RequestID) > 128 {
 			return nil, bad(400, "invalid_replay")
 		}
-		address := os.Getenv("RULECORE_ADDR")
+		address := strings.TrimSpace(s.RuleCoreAddr)
 		if address == "" {
 			address = "rulecore:50051"
 		}
@@ -98,7 +98,7 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 				var version string
 				var start, end int64
 				var frozen bool
-				e = tx.QueryRowContext(r.Context(), "SELECT rb.rule_version,b.starts_at,b.ends_at,b.frozen FROM rule_boards rb JOIN boards b ON b.game_id=rb.game_id AND b.id=rb.board_id AND b.season=rb.season WHERE rb.game_id=? AND rb.board_id=? AND rb.season=? FOR UPDATE", g, b.Board, b.Season).Scan(&version, &start, &end, &frozen)
+				e = tx.QueryRowContext(r.Context(), "SELECT rb.rule_version,b.starts_at,b.ends_at,b.frozen FROM rule_boards rb JOIN boards b ON b.game_id=rb.game_id AND b.id=rb.board_id AND b.season=rb.season WHERE rb.game_id=? AND rb.board_id=? AND rb.season=? FOR SHARE", g, b.Board, b.Season).Scan(&version, &start, &end, &frozen)
 				if e != nil || version != b.Version {
 					return bad(400, "invalid_verified_board")
 				}
@@ -111,12 +111,12 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 					return e
 				}
 				if e == sql.ErrNoRows || out.Score > old {
-					if _, e = tx.ExecContext(r.Context(), "INSERT INTO scores VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, b.Board, b.Season, p, out.Score, time.Now().UnixNano()); e != nil {
+					if _, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, b.Board, b.Season, p, out.Score, time.Now().UnixNano()); e != nil {
 						return e
 					}
 				}
 			}
-			_, e = tx.ExecContext(r.Context(), "INSERT INTO replays VALUES(?,?,?,?,?,?,?,?,?)", g, p, id, payloadHash, b.Version, b.Seed, actions, out.Score, strconv.FormatUint(out.StateHash, 10))
+			_, e = tx.ExecContext(r.Context(), "INSERT INTO replays(game_id,player_id,request_id,payload_hash,rule_version,seed,actions,score,state_hash) VALUES(?,?,?,?,?,?,?,?,?)", g, p, id, payloadHash, b.Version, b.Seed, actions, out.Score, strconv.FormatUint(out.StateHash, 10))
 			return e
 		})
 		return map[string]any{"valid": out.Valid, "score": out.Score, "state_hash": strconv.FormatUint(out.StateHash, 10), "finished": out.Finished, "victory": out.Victory, "trust": "deterministic_replay"}, e

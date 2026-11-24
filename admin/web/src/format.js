@@ -1,5 +1,9 @@
 const ERROR_TEXT = {
   invalid_credentials: "账号或密码不正确",
+  auth_rate_limited: "登录尝试过于频繁，请稍后再试",
+  auth_busy: "认证服务繁忙，请稍后重试",
+  sandbox_admin_disabled: "当前环境已禁用本地测试管理员账号",
+  invalid_api_base: "桌面端仅允许连接本机 API 地址（127.0.0.1 / localhost 的 18080 或 18081 端口）",
   gm_unauthorized: "登录已过期，请重新登录",
   game_forbidden: "当前账号没有这款游戏的权限",
   permission_denied: "角色权限不足",

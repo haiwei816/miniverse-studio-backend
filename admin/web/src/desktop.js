@@ -2,6 +2,37 @@
 // window.__TAURI__ (withGlobalTauri), so the web build carries no Tauri
 // dependency and the same files run in both places.
 const BASE_KEY = "miniverse.api";
+const DEFAULT_API_BASE = "http://127.0.0.1:18080";
+
+export function validateApiBase(raw) {
+  const fail = () => {
+    const err = new Error("invalid_api_base");
+    err.code = "invalid_api_base";
+    throw err;
+  };
+  if (typeof raw !== "string") fail();
+  const trimmed = raw.trim();
+  if (!trimmed) fail();
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    fail();
+  }
+  if (
+    url.protocol !== "http:" ||
+    (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") ||
+    (url.port !== "18080" && url.port !== "18081") ||
+    url.username ||
+    url.password ||
+    (url.pathname !== "" && url.pathname !== "/") ||
+    url.search ||
+    url.hash
+  ) {
+    fail();
+  }
+  return url.origin;
+}
 
 export function shell() {
   return typeof window !== "undefined" ? window.__TAURI__ : null;
@@ -12,13 +43,22 @@ export function isDesktop() {
 }
 
 export function apiBase() {
+  if (typeof localStorage === "undefined") return DEFAULT_API_BASE;
   const configured = localStorage.getItem(BASE_KEY);
-  if (configured) return configured.replace(/\/$/, "");
-  return "http://127.0.0.1:18080";
+  if (!configured) return DEFAULT_API_BASE;
+  try {
+    return validateApiBase(configured);
+  } catch {
+    return DEFAULT_API_BASE;
+  }
 }
 
 export function setApiBase(value) {
-  localStorage.setItem(BASE_KEY, value.replace(/\/$/, ""));
+  const normalized = validateApiBase(value);
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(BASE_KEY, normalized);
+  }
+  return normalized;
 }
 
 export async function desktopFetch(path, init) {
