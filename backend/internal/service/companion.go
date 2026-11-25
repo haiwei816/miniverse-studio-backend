@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"miniverse/backend/internal/opsagent"
 	"net/http"
 	"net/url"
 	"strings"
@@ -345,7 +346,11 @@ func (s *Service) companionRoutes(m *http.ServeMux) {
 		if b.ExpectedEpoch != nil && *b.ExpectedEpoch < 0 {
 			return nil, bad(400, "invalid_companion_context")
 		}
-		return s.switchCompanionContext(r.Context(), p, b.Game, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), b.ExpectedEpoch)
+		tok, e := s.playerToken(r)
+		if e != nil {
+			return nil, e
+		}
+		return s.switchCompanionContext(r.Context(), p, b.Game, tok, b.ExpectedEpoch)
 	})
 	s.handle(m, "PUT /v1/games/{game}/companion/context", func(r *http.Request) (any, error) {
 		g, p, e := s.scope(r)
@@ -509,7 +514,7 @@ func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error)
 		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(s.Sandbox && u.Scheme == "http")) {
 			return nil, bad(503, "companion_model_configuration_invalid")
 		}
-		reply, e = callCompanionModel(r.Context(), endpoint, s.CompanionAPIKey, s.CompanionModel, companionSystemPrompt(c, world, mem), b.Message, b.History...)
+		reply, e = callCompanionModel(r.Context(), endpoint, s.CompanionAPIKey, s.CompanionModel, s.Sandbox, companionSystemPrompt(c, world, mem), b.Message, b.History...)
 		if e != nil {
 			return nil, e
 		}
@@ -523,7 +528,7 @@ func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error)
 	}
 	return map[string]any{"reply": reply, "mode": mode, "companion_id": c.ID, "game_id": world.Game, "epoch": world.Epoch, "actions": []any{}}, nil
 }
-func callCompanionModel(ctx context.Context, endpoint, key, model, system, message string, history ...companionMessage) (string, error) {
+func callCompanionModel(ctx context.Context, endpoint, key, model string, sandbox bool, system, message string, history ...companionMessage) (string, error) {
 	if strings.TrimSpace(model) == "" {
 		return "", bad(503, "companion_model_configuration_invalid")
 	}
@@ -544,9 +549,12 @@ func callCompanionModel(ctx context.Context, endpoint, key, model, system, messa
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := opsagent.NewSafeHTTPClient(8*time.Second, sandbox)
 	res, e := client.Do(req)
 	if e != nil {
+		if errors.Is(e, opsagent.ErrSSRFBlocked) {
+			return "", bad(400, "ops_agent_ssrf_blocked")
+		}
 		return "", bad(502, "companion_model_unavailable")
 	}
 	defer res.Body.Close()

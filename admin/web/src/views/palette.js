@@ -8,6 +8,7 @@ const PAGES = [
   { id: "players", label: "玩家与资产", icon: "players" },
   { id: "operations", label: "运营与审批", icon: "operations" },
   { id: "audit", label: "操作审计", icon: "audit" },
+  { id: "ops-agent", label: "智能排障", icon: "spark" },
   { id: "system", label: "系统状态", icon: "system" },
 ];
 

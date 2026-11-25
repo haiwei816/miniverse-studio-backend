@@ -8,9 +8,9 @@
 
 | 检查 | 实际工作 | 交付 |
 | --- | --- | --- |
-| backend | 工作流语法、Go race 测试、vet、Linux 构建 | API、迁移程序、SQL、提交号及 SHA256 清单 |
-| frontend (admin/player) | 锁文件安装、依赖审计、玩家测试、两个网站构建 | 两份网站 dist |
-| integration | 独立 Compose、HTTP/权限/迁移/恢复测试、Godot SDK | 成功或失败的容器状态与日志 |
+| backend | 工作流语法、Go race 测试、vet、Linux 构建 | API、迁移程序、MCP stdio 桥接程序、SQL、提交号及 SHA256 清单 |
+| frontend (admin/player) | 锁文件安装、依赖审计、前后端契约测试与网站构建 | 两份网站 dist |
+| integration | 独立 Compose、HTTP/权限/域闭环/AI MCP/迁移/恢复测试、Godot SDK | 成功或失败的容器状态与日志 |
 | desktop | Windows MSVC Rust 工具链、锁文件构建 Tauri | Windows x64 NSIS 安装程序 |
 
 产物名包含本次 Git SHA。普通产物保留 14 天；诊断日志与可选镜像包保留 7 天。PR 产物用于测试，全部检查通过的同一提交才作为交付候选。Windows 安装包没有配置代码签名。
@@ -59,9 +59,15 @@ docker compose -f deploy/compose.yaml --profile rules --profile gm --profile pla
 docker compose -f deploy/compose.yaml logs --tail 200 api
 curl --fail http://127.0.0.1:18080/health
 curl --fail http://127.0.0.1:18080/ready
+
+# 可选监控栈：Prometheus (19090) + Grafana (13000)，通过 METRICS_BEARER_TOKEN 抓取 /gm/system/metrics
+docker compose -f deploy/compose.yaml --profile observability up -d --wait
+
+# 自动化 mysqldump 备份与独立临时库恢复演练
+node scripts/backup-verify.mjs
 ```
 
-`/health` 表示进程存活；`/ready` 还检查数据库连接与 schema。网站容器健康检查只确认静态页面能提供，业务可用性仍以 API readiness 和实际请求为准。Docker 不会仅因容器 unhealthy 自动重启它，应先查日志和数据库。
+`rulecore` 镜像已切换为多阶段 `debian:trixie-slim` 构建，仅保留 C++20 运行时共享库与可执行文件，并在镜像构建阶段执行 `/build/rule_tests`。`/health` 表示进程存活；`/ready` 还检查数据库连接与 schema。网站容器健康检查只确认静态页面能提供，业务可用性仍以 API readiness 和实际请求为准。Docker 不会仅因容器 unhealthy 自动重启它，应先查日志和数据库。
 
 经 nginx 的客户端 IP 识别需要精确配置 `TRUSTED_PROXIES`。缺省为空时，经同一代理的玩家共用该代理认证额度，可能互相挤占。仅信任受控代理固定地址或专用最小网段，不能把整个默认内网设为可信。
 

@@ -38,6 +38,19 @@ export const OperationsView = defineComponent({
     const config = ref(JSON.stringify(ACTIVITY_TEMPLATE, null, 2));
     const brief = ref("每日升级建筑 3 次奖励 5 木材");
     const plan = ref(null);
+    const boardId = ref("weekly");
+    const boardSeason = ref("s1");
+    const boardMode = ref("max");
+    const boardItem = ref("wood");
+    const boardReward = ref(5);
+    const boardRuleVersion = ref("");
+    const boardRequireTicket = ref(false);
+    const boardFrozen = ref(false);
+    const boardStartsAt = ref(1);
+    const boardEndsAt = ref(4102444800);
+    const settleBoard = ref("weekly");
+    const settleSeason = ref("s1");
+    const boards = ref([]);
     const notice = ref("");
     const rows = ref([]);
     const loading = ref(false);
@@ -58,6 +71,7 @@ export const OperationsView = defineComponent({
       if (activeAbort) activeAbort.abort();
       if (!targetGame) {
         rows.value = [];
+        boards.value = [];
         loadError.value = "";
         loading.value = false;
         return;
@@ -66,9 +80,13 @@ export const OperationsView = defineComponent({
       loading.value = true;
       loadError.value = "";
       try {
-        const result = await request(`/gm/games/${encodeURIComponent(targetGame)}/requests`, { signal: activeAbort.signal });
+        const [reqRes, boardRes] = await Promise.all([
+          request(`/gm/games/${encodeURIComponent(targetGame)}/requests`, { signal: activeAbort.signal }),
+          request(`/gm/games/${encodeURIComponent(targetGame)}/boards`, { signal: activeAbort.signal }).catch(() => []),
+        ]);
         if (run !== generation || targetGame !== props.game) return;
-        rows.value = Array.isArray(result) ? result : [];
+        rows.value = Array.isArray(reqRes) ? reqRes : [];
+        boards.value = Array.isArray(boardRes) ? boardRes : [];
       } catch (e) {
         if (e && e.name === "AbortError") return;
         if (run !== generation || targetGame !== props.game) return;
@@ -120,6 +138,21 @@ export const OperationsView = defineComponent({
             return;
           }
           payload = { players: list, item: item.value.trim(), amount: Number(amount.value) };
+        } else if (kind.value === "board_upsert") {
+          payload = {
+            id: boardId.value.trim(),
+            season: boardSeason.value.trim(),
+            mode: boardMode.value,
+            starts_at: Number(boardStartsAt.value),
+            ends_at: Number(boardEndsAt.value),
+            frozen: !!boardFrozen.value,
+            item: boardItem.value.trim(),
+            reward_amount: Number(boardReward.value),
+            rule_version: boardRuleVersion.value.trim(),
+            require_ticket: !!boardRequireTicket.value,
+          };
+        } else if (kind.value === "season_settle") {
+          payload = { board: settleBoard.value.trim(), season: settleSeason.value.trim() };
         } else {
           payload = JSON.parse(config.value);
         }
@@ -170,6 +203,40 @@ export const OperationsView = defineComponent({
           item: p.item || "—",
           perPlayer,
           total: list.length * perPlayer,
+        };
+      }
+      if (c.row.kind === "activity_stop") {
+        return {
+          kind: "activity_stop",
+          activityId: p.activity_id || "—",
+        };
+      }
+      if (c.row.kind === "board_upsert") {
+        return {
+          kind: "board_upsert",
+          id: p.id || "—",
+          season: p.season || "—",
+          mode: p.mode || "—",
+          item: p.item || "—",
+          rewardAmount: p.reward_amount ?? 0,
+          ruleVersion: p.rule_version || "无规则校验",
+          requireTicket: !!p.require_ticket,
+          frozen: !!p.frozen,
+        };
+      }
+      if (c.row.kind === "season_settle") {
+        return {
+          kind: "season_settle",
+          board: p.board || "—",
+          season: p.season || "—",
+        };
+      }
+      if (c.row.kind === "player_ban") {
+        return {
+          kind: "player_ban",
+          playerId: p.player_id || "—",
+          banReason: p.reason || "—",
+          expiresAt: p.expires_at ? stamp(p.expires_at) : "永久封禁",
         };
       }
       return {
@@ -287,7 +354,31 @@ export const OperationsView = defineComponent({
         const total = list.length * (Number(p.amount) || 0);
         return `${list.length} 名玩家 · ${p.item} × ${count(p.amount)}（共 ${count(total)}）`;
       }
+      if (row.kind === "activity_stop") {
+        return "停用活动 " + (p.activity_id || "?");
+      }
+      if (row.kind === "board_upsert") {
+        return `榜单 ${p.id || "?"} / ${p.season || "?"} (${p.mode || "max"})`;
+      }
+      if (row.kind === "season_settle") {
+        return `结算赛季 ${p.board || "?"} / ${p.season || "?"}`;
+      }
+      if (row.kind === "player_ban") {
+        return `封禁玩家 ${p.player_id || "?"}`;
+      }
       return "活动 " + (p.id || "?") + " v" + (p.version || "?");
+    }
+
+    function pickBoardForSettle(b) {
+      kind.value = "season_settle";
+      settleBoard.value = b.id;
+      settleSeason.value = b.season;
+      reason.value = reason.value || `结算赛季 ${b.id}/${b.season}`;
+      notify(`已填充结算表单：${b.id} / ${b.season}`, "info");
+    }
+
+    function kindLabel(k) {
+      return { reward: "补发", activity_stop: "停活动", board_upsert: "榜单", season_settle: "结算", player_ban: "封禁", activity: "活动" }[k] || "活动";
     }
 
     watch(
@@ -322,9 +413,11 @@ export const OperationsView = defineComponent({
 
     return {
       kind, reason, requestId, players, item, amount, config, brief, plan, notice,
+      boardId, boardSeason, boardMode, boardItem, boardReward, boardRuleVersion, boardRequireTicket, boardFrozen, boardStartsAt, boardEndsAt,
+      settleBoard, settleSeason, boards,
       rows, loading, loadError, busy, actingId, expanded, confirmAction, confirmSelfAuthor, confirmDetails,
       canSubmit, canApprove, load, generate, submit, openConfirm, executeConfirm, rollback, stop, announce, summary,
-      stamp, relative, requestState, count,
+      pickBoardForSettle, kindLabel, stamp, relative, requestState, count,
     };
   },
   template: `
@@ -357,7 +450,7 @@ export const OperationsView = defineComponent({
 
           <div class="field" style="margin-top:12px">
             <span class="field-label">申请类型</span>
-            <segmented v-model="kind" :options="[{value:'reward',label:'补发奖励'},{value:'activity',label:'活动配置'}]" label="申请类型" />
+            <segmented v-model="kind" :options="[{value:'reward',label:'补发奖励'},{value:'activity',label:'活动配置'},{value:'board_upsert',label:'榜单配置'},{value:'season_settle',label:'赛季结算'}]" label="申请类型" />
           </div>
 
           <div class="field" style="margin-top:12px">
@@ -373,6 +466,37 @@ export const OperationsView = defineComponent({
             <div class="grid-2" style="margin-top:12px;gap:10px">
               <label class="field"><span class="field-label">道具 ID</span><input class="input mono" v-model="item" /></label>
               <label class="field"><span class="field-label">数量</span><input class="input" type="number" min="1" max="1000000" v-model="amount" /></label>
+            </div>
+          </template>
+
+          <template v-else-if="kind === 'board_upsert'">
+            <div class="grid-2" style="margin-top:12px;gap:10px">
+              <label class="field"><span class="field-label">榜单 ID</span><input class="input mono" v-model="boardId" /></label>
+              <label class="field"><span class="field-label">赛季</span><input class="input mono" v-model="boardSeason" /></label>
+              <label class="field">
+                <span class="field-label">排序模式</span>
+                <select class="select" v-model="boardMode">
+                  <option value="max">max (越高越强)</option>
+                  <option value="min">min (越低越强)</option>
+                  <option value="sum">sum (累计)</option>
+                </select>
+              </label>
+              <label class="field"><span class="field-label">规则版本（留空不校验）</span><input class="input mono" v-model="boardRuleVersion" placeholder="card-v1" /></label>
+              <label class="field"><span class="field-label">结算道具</span><input class="input mono" v-model="boardItem" /></label>
+              <label class="field"><span class="field-label">奖励数量</span><input class="input" type="number" min="0" max="1000000" v-model="boardReward" /></label>
+              <label class="field"><span class="field-label">开始时间戳 (s)</span><input class="input mono" type="number" v-model="boardStartsAt" /></label>
+              <label class="field"><span class="field-label">结束时间戳 (s)</span><input class="input mono" type="number" v-model="boardEndsAt" /></label>
+            </div>
+            <div class="toolbar" style="margin-top:10px;gap:16px">
+              <label class="small"><input type="checkbox" v-model="boardRequireTicket" /> 强制服务端开局票据 (server_seeded_replay)</label>
+              <label class="small"><input type="checkbox" v-model="boardFrozen" /> 冻结榜单</label>
+            </div>
+          </template>
+
+          <template v-else-if="kind === 'season_settle'">
+            <div class="grid-2" style="margin-top:12px;gap:10px">
+              <label class="field"><span class="field-label">榜单 ID</span><input class="input mono" v-model="settleBoard" /></label>
+              <label class="field"><span class="field-label">赛季</span><input class="input mono" v-model="settleSeason" /></label>
             </div>
           </template>
 
@@ -398,7 +522,7 @@ export const OperationsView = defineComponent({
               <tr v-for="row in rows" :key="row.id" data-clickable="true" @click="expanded[row.id] = !expanded[row.id]">
                 <td>
                   <div class="list-title">{{ summary(row) }}</div>
-                  <div class="list-meta">{{ row.kind === 'reward' ? '补发' : '活动' }} · {{ row.creator }} → {{ row.reviewer || '待指派' }} · {{ relative(row.created_at) }}</div>
+                  <div class="list-meta">{{ kindLabel(row.kind) }} · {{ row.creator }} → {{ row.reviewer || '待指派' }} · {{ relative(row.created_at) }}</div>
                   <div class="list-meta">{{ row.reason }}</div>
                   <pre v-if="expanded[row.id]" class="raw">{{ JSON.stringify(row.payload, null, 2) }}</pre>
                 </td>
@@ -424,6 +548,27 @@ export const OperationsView = defineComponent({
         </div>
       </article>
     </div>
+
+    <article class="card">
+      <div class="card-head"><div class="card-title">排行榜与赛季状态</div><div class="card-note">{{ boards.length }} 个榜单</div></div>
+      <div class="table-wrap">
+        <table class="table" v-if="boards.length">
+          <thead><tr><th>榜单 / 赛季</th><th>可信度</th><th>奖励</th><th>状态</th><th class="tight">操作</th></tr></thead>
+          <tbody>
+            <tr v-for="b in boards" :key="b.id + '/' + b.season">
+              <td class="mono">{{ b.id }} / {{ b.season }} <span class="small muted">({{ b.mode }})</span></td>
+              <td class="small mono">{{ b.trust }}</td>
+              <td class="small mono">{{ b.reward_amount > 0 ? b.item + ' × ' + b.reward_amount : '无奖励' }}</td>
+              <td><span class="pill" :data-tone="b.settled ? 'ok' : b.frozen ? 'warn' : 'info'">{{ b.settled ? '已结算' : b.frozen ? '已冻结' : '进行中' }}</span></td>
+              <td class="tight">
+                <button v-if="canSubmit && !b.settled" type="button" class="btn btn-quiet btn-sm" @click="pickBoardForSettle(b)">填入结算</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <empty v-else text="当前游戏暂无排行榜" />
+      </div>
+    </article>
 
     <article class="card">
       <div class="card-head"><div class="card-title">系统公告</div><div class="card-note">有效期 24 小时</div></div>
@@ -470,6 +615,43 @@ export const OperationsView = defineComponent({
               <span v-if="!confirmDetails.players.length" class="small muted">无玩家</span>
             </div>
           </div>
+        </template>
+
+        <template v-else-if="confirmDetails.kind === 'activity_stop'">
+          <hr class="hr" />
+          <dl class="kv">
+            <div><dt>动作类型</dt><dd>停用异常活动</dd></div>
+            <div><dt>目标活动 ID</dt><dd class="mono"><b>{{ confirmDetails.activityId }}</b></dd></div>
+          </dl>
+        </template>
+
+        <template v-else-if="confirmDetails.kind === 'board_upsert'">
+          <hr class="hr" />
+          <dl class="kv">
+            <div><dt>榜单 / 赛季</dt><dd class="mono"><b>{{ confirmDetails.id }} / {{ confirmDetails.season }}</b></dd></div>
+            <div><dt>排序模式</dt><dd class="mono">{{ confirmDetails.mode }}</dd></div>
+            <div><dt>结算奖励</dt><dd class="mono">{{ confirmDetails.item }} × {{ confirmDetails.rewardAmount }}</dd></div>
+            <div><dt>规则校验</dt><dd>{{ confirmDetails.ruleVersion }} {{ confirmDetails.requireTicket ? '· 强制开局票据' : '' }}</dd></div>
+            <div><dt>冻结状态</dt><dd>{{ confirmDetails.frozen ? '已冻结' : '开放' }}</dd></div>
+          </dl>
+        </template>
+
+        <template v-else-if="confirmDetails.kind === 'season_settle'">
+          <hr class="hr" />
+          <dl class="kv">
+            <div><dt>动作类型</dt><dd>结算排行榜赛季并向 Top3 发奖</dd></div>
+            <div><dt>目标榜单</dt><dd class="mono"><b>{{ confirmDetails.board }} / {{ confirmDetails.season }}</b></dd></div>
+          </dl>
+        </template>
+
+        <template v-else-if="confirmDetails.kind === 'player_ban'">
+          <hr class="hr" />
+          <dl class="kv">
+            <div><dt>动作类型</dt><dd>封禁玩家并踢出在线会话</dd></div>
+            <div><dt>目标玩家</dt><dd class="mono"><b>{{ confirmDetails.playerId }}</b></dd></div>
+            <div><dt>封禁原因</dt><dd>{{ confirmDetails.banReason }}</dd></div>
+            <div><dt>有效期</dt><dd>{{ confirmDetails.expiresAt }}</dd></div>
+          </dl>
         </template>
 
         <template v-else>

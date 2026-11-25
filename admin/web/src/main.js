@@ -1,7 +1,7 @@
 import "./styles/fonts.css";
 import "./styles/theme.css";
 import { createApp, ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
-import { request, setToken, onSessionLost } from "./api.js";
+import { request, setToken, setSessionActive, onSessionLost } from "./api.js";
 import { notify, ToastHost, Drawer, ModalDialog, Segmented, Empty, ErrorBox, SkeletonRows } from "./components/ui.js";
 import { Icon } from "./components/icons.js";
 import { Sparkline, TrendChart } from "./components/charts.js";
@@ -10,6 +10,7 @@ import { OverviewView } from "./views/overview.js";
 import { PlayersView } from "./views/players.js";
 import { OperationsView } from "./views/operations.js";
 import { AuditView } from "./views/audit.js";
+import { OpsAgentView } from "./views/ops_agent.js";
 import { SystemView } from "./views/system.js";
 import { PublishingView } from "./views/publishing.js";
 import { CommandPalette } from "./views/palette.js";
@@ -21,7 +22,8 @@ const NAV = [
   { id: "players", label: "玩家", icon: "players", title: "玩家与资产", sub: "搜索玩家，查看存档、库存、邮件与流水" },
   { id: "operations", label: "运营", icon: "operations", title: "运营与审批", sub: "补发、活动配置与公告，双人审批后执行" },
   { id: "audit", label: "审计", icon: "audit", title: "操作审计", sub: "所有管理写操作与异常记录" },
-  { id: "system", label: "系统", icon: "system", title: "系统状态", sub: "服务健康、失败操作与接入信息" },
+  { id: "ops-agent", label: "智能排障", icon: "spark", title: "智能排障与 MCP 运维", sub: "通过 MCP 关联玩家数据、业务日志与服务状态，输出受控提案" },
+  { id: "system", label: "系统", icon: "system", title: "系统状态", sub: "服务健康、稳定性指标、异常日志与接入信息" },
 ];
 
 const THEME_KEY = "miniverse.theme";
@@ -36,6 +38,7 @@ const app = createApp({
   components: { ToastHost, CommandPalette, ModalDialog },
   setup() {
     const token = ref("");
+    const signedIn = ref(false);
     const role = ref("");
     const signedInUser = ref("");
     const username = ref("");
@@ -51,10 +54,12 @@ const app = createApp({
     const playerQuery = ref("");
     const playerQuerySeq = ref(0);
     const awardTarget = ref(null);
+    const opsAgentTarget = ref(null);
     const publishingDirty = ref(false);
     const pendingLeave = ref(null);
     const themeMode = ref(localStorage.getItem(THEME_KEY) || "auto");
     let awardSeq = 0;
+    let diagnoseSeq = 0;
 
     const desktop = isDesktop();
     const current = computed(() => NAV.find((n) => n.id === view.value) || NAV[0]);
@@ -82,7 +87,9 @@ const app = createApp({
 
     function resetSession() {
       token.value = "";
+      signedIn.value = false;
       setToken("");
+      setSessionActive(false);
       role.value = "";
       signedInUser.value = "";
       games.value = [];
@@ -107,8 +114,15 @@ const app = createApp({
       }
       busy.value = true;
       try {
-        const session = await request("/gm/login", { method: "POST", body: { username: username.value, password: password.value } });
-        setToken(session.access_token);
+        const session = await request("/gm/login", { method: "POST", body: { username: username.value, password: password.value }, skipUnauthorized: true });
+        if (desktop) {
+          setToken(session.access_token);
+          token.value = session.access_token;
+        } else {
+          setToken("");
+          token.value = "";
+        }
+        setSessionActive(true);
         const list = await request("/gm/games");
         const parsedGames = Array.isArray(list) ? list : [];
         games.value = parsedGames;
@@ -118,11 +132,10 @@ const app = createApp({
         signedInUser.value = session.username || username.value.trim();
         role.value = session.role;
         password.value = "";
-        token.value = session.access_token;
+        signedIn.value = true;
         tick.value++;
       } catch (e) {
-        setToken("");
-        token.value = "";
+        resetSession();
         notify(errorText(e.code), "error");
       } finally {
         busy.value = false;
@@ -156,8 +169,12 @@ const app = createApp({
         awardTarget.value = { uid: action.value || "", seq: ++awardSeq };
         view.value = "operations";
       } else if (action.type === "logout") {
-        resetSession();
-        notify("已退出登录", "success");
+        request("/gm/logout", { method: "POST", skipUnauthorized: true })
+          .catch(() => {})
+          .finally(() => {
+            resetSession();
+            notify("已退出登录", "success");
+          });
       }
     }
 
@@ -192,14 +209,19 @@ const app = createApp({
       guardLeave({ type: "award", value: uid || "" });
     }
 
+    function openDiagnose(payload) {
+      opsAgentTarget.value = { ...(payload || {}), seq: ++diagnoseSeq };
+      guardLeave({ type: "view", value: "ops-agent" });
+    }
+
     function onKeydown(event) {
       const meta = event.metaKey || event.ctrlKey;
-      if (meta && event.key.toLowerCase() === "k" && token.value) {
+      if (meta && event.key.toLowerCase() === "k" && signedIn.value) {
         event.preventDefault();
         paletteOpen.value = true;
         return;
       }
-      if (meta && event.key.toLowerCase() === "r" && token.value) {
+      if (meta && event.key.toLowerCase() === "r" && signedIn.value) {
         event.preventDefault();
         refresh();
         return;
@@ -213,7 +235,7 @@ const app = createApp({
     onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
 
     watch(game, () => {
-      if (token.value && game.value) tick.value++;
+      if (signedIn.value && game.value) tick.value++;
     });
 
     // Desktop shell: tray menu items arrive as events, and a slow poll turns
@@ -232,7 +254,7 @@ const app = createApp({
       onMounted(() => {
         let last = null;
         poll = setInterval(async () => {
-          if (!token.value || !game.value || document.hidden) return;
+          if (!signedIn.value || !game.value || document.hidden) return;
           try {
             const data = await request(`/gm/games/${encodeURIComponent(game.value)}/overview`);
             const pending = data.totals.requests_pending;
@@ -249,17 +271,37 @@ const app = createApp({
     }
 
     onMounted(async () => {
-      if (desktop) document.documentElement.dataset.shell = "desktop";
+      if (desktop) {
+        document.documentElement.dataset.shell = "desktop";
+        return;
+      }
+      try {
+        const me = await request("/gm/me", { skipUnauthorized: true });
+        if (me && me.username) {
+          const parsedGames = Array.isArray(me.games) ? me.games : [];
+          games.value = parsedGames;
+          if (!parsedGames.some((g) => g.game_id === game.value)) {
+            game.value = parsedGames.length ? parsedGames[0].game_id : "";
+          }
+          signedInUser.value = me.username;
+          role.value = me.role || "";
+          setSessionActive(true);
+          signedIn.value = true;
+          tick.value++;
+        }
+      } catch {
+        /* no active cookie session yet */
+      }
     });
 
     return {
-      token, role, signedInUser, username, password, busy, games, game, view, tick, menuOpen, mobileNavOpen, paletteOpen,
-      playerQuery, playerQuerySeq, awardTarget, publishingDirty, pendingLeave, themeMode, themeIcon, desktop, current, NAV, gameName,
-      login, logout, go, selectGame, refresh, openPlayer, openAward, confirmLeave, cycleTheme,
+      token, signedIn, role, signedInUser, username, password, busy, games, game, view, tick, menuOpen, mobileNavOpen, paletteOpen,
+      playerQuery, playerQuerySeq, awardTarget, opsAgentTarget, publishingDirty, pendingLeave, themeMode, themeIcon, desktop, current, NAV, gameName,
+      login, logout, go, selectGame, refresh, openPlayer, openAward, openDiagnose, confirmLeave, cycleTheme,
     };
   },
   template: `
-  <div v-if="!token" class="login-shell">
+  <div v-if="!signedIn" class="login-shell">
     <div class="login">
       <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
       <div class="eyebrow">MINIVERSE STUDIO</div>
@@ -361,7 +403,8 @@ const app = createApp({
         <players-view v-else-if="view === 'players'" :game="game" :game-name="gameName" :role="role" :tick="tick" :initial-query="playerQuery" :initial-query-seq="playerQuerySeq" @award="openAward" />
         <operations-view v-else-if="view === 'operations'" :game="game" :game-name="gameName" :role="role" :username="signedInUser" :tick="tick" :award-target="awardTarget" />
         <audit-view v-else-if="view === 'audit'" :game="game" :game-name="gameName" :role="role" :tick="tick" />
-        <system-view v-else :game="game" :game-name="gameName" :role="role" :tick="tick" />
+        <ops-agent-view v-else-if="view === 'ops-agent'" :game="game" :game-name="gameName" :role="role" :tick="tick" :initial-target="opsAgentTarget" @navigate="go" />
+        <system-view v-else :game="game" :game-name="gameName" :role="role" :tick="tick" @diagnose="openDiagnose" />
       </div>
     </main>
 
@@ -400,6 +443,7 @@ app.component("overview-view", OverviewView);
 app.component("players-view", PlayersView);
 app.component("operations-view", OperationsView);
 app.component("audit-view", AuditView);
+app.component("ops-agent-view", OpsAgentView);
 app.component("system-view", SystemView);
 app.component("publishing-view", PublishingView);
 app.mount("#app");

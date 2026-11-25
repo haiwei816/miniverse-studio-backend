@@ -102,6 +102,9 @@ func (s *Service) platformRoutes(m *http.ServeMux) {
 						return e
 					}
 				}
+				if e = s.checkPlayerBanWith(r.Context(), tx, b.Game, player); e != nil {
+					return e
+				}
 				_, e = tx.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", s.sessionHash(token), player, time.Now().Add(time.Hour).Unix())
 				return e
 			})

@@ -2,7 +2,6 @@ package service
 
 import (
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -25,6 +24,9 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 			return nil, bad(400, "invalid_game")
 		}
 		_, e := s.DB.ExecContext(r.Context(), "INSERT IGNORE INTO games(id,name) VALUES(?,?)", b.ID, b.Name)
+		if e == nil {
+			s.InvalidateGameCache(b.ID)
+		}
 		return b, e
 	})
 	s.handle(m, "GET /v1/games", func(r *http.Request) (any, error) {
@@ -65,6 +67,9 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 			if e := s.DB.QueryRowContext(r.Context(), "SELECT id FROM accounts WHERE secret_hash=?", hash(secret)).Scan(&id); e != nil {
 				return nil, bad(401, "invalid_guest_secret")
 			}
+			if e := s.checkPlayerBan(r.Context(), "", id); e != nil {
+				return nil, e
+			}
 		}
 		token := random()
 		exp := time.Now().Add(time.Hour).Unix()
@@ -76,7 +81,14 @@ func (s *Service) identityRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
-		e = s.logoutPlatformSession(r.Context(), p, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		tok, e := s.playerToken(r)
+		if e != nil {
+			return nil, e
+		}
+		e = s.logoutPlatformSession(r.Context(), p, tok)
+		if e == nil {
+			setResponseCookie(r, playerSessionCookie("", -1, s.Sandbox))
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /v1/games/{game}/profile", func(r *http.Request) (any, error) {

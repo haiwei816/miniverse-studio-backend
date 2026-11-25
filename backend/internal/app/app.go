@@ -42,6 +42,13 @@ func Run(cfg config.Config) error {
 	svc.CompanionChatURL = cfg.CompanionChatURL
 	svc.CompanionAPIKey = cfg.CompanionAPIKey
 	svc.CompanionModel = cfg.CompanionModel
+	svc.OpsAgentProtocol = cfg.OpsAgentProtocol
+	svc.OpsAgentURL = cfg.OpsAgentURL
+	svc.OpsAgentAPIKey = cfg.OpsAgentAPIKey
+	svc.OpsAgentModel = cfg.OpsAgentModel
+	svc.OpsAgentSecretKey = cfg.OpsAgentSecretKey
+	svc.MetricsBearerToken = cfg.MetricsBearerToken
+	svc.PersistOpsEvents = true
 	defer svc.Close()
 	if err := svc.Initialize(); err != nil {
 		return err
@@ -58,7 +65,7 @@ func Run(cfg config.Config) error {
 		}
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
-	server := &http.Server{Handler: httpserver.Logging(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Handler: httpserver.Logging(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	stopCleanup := database.StartCleanup(ctx, db)

@@ -1,15 +1,52 @@
-import assert from'node:assert/strict';import{api,login}from'./client.mjs';import{gm}from'./gm-client.mjs';
-const a=await login();await api('/v1/games/sky-island/profile','GET',undefined,a.access_token);const admin=await gm(),reviewer=await gm('reviewer'),support=await gm('support'),base='/gm/games/sky-island',id='req'+Date.now();
-const body={id,kind:'reward',reason:'ticket-123 compensation',payload:{players:[a.player_id],item:'wood',amount:7}};
-await api(base+'/requests','POST',body,support,403);await api(base+'/requests','POST',body,admin);await api(base+'/requests','POST',body,admin);
-await api(base+`/requests/${id}/approve`,'POST',{reason:'self check'},admin,403);await api(base+`/requests/${id}/approve`,'POST',{reason:'reviewed ticket-123'},reviewer);await api(base+`/requests/${id}/approve`,'POST',{reason:'retry ticket-123'},reviewer);
-assert.equal((await api('/v1/games/sky-island/mail','GET',undefined,a.access_token)).length,1);await api(base+`/requests/${id}/cancel`,'POST',{reason:'too late'},admin,409);
-await api(base+'/requests','POST',{...body,id:id+'cancel'},admin);await api(base+`/requests/${id}cancel/cancel`,'POST',{reason:'withdraw ticket'},admin);
-const config={id:id+'act',version:1,kind:'daily',event_type:'visit',target:1,starts_at:1,ends_at:4102444800,client_allowed:true,item:'wood',reward_amount:2};
-await api(base+'/requests','POST',{id:id+'act',kind:'activity',reason:'publish daily',payload:config},admin);await api(base+`/requests/${id}act/approve`,'POST',{reason:'review daily'},reviewer);
-await api(base+'/requests','POST',{id:id+'v2',kind:'activity',reason:'rollback via reviewed new version',payload:{...config,version:2}},admin);await api(base+`/requests/${id}v2/approve`,'POST',{reason:'review rollback'},reviewer);
-assert.equal((await api(base+`/activities/${config.id}/versions`,'GET',undefined,admin)).length,2);
-await api(base+`/activities/${config.id}/stop`,'POST',{reason:'stop campaign'},admin);await api(base+'/announcements/notice','PUT',{body:'Welcome',expires_at:4102444800,reason:'publish notice'},admin);
-assert.ok((await api(base+'/audit','GET',undefined,admin)).some(x=>x.action==='request_approve'&&x.reason==='reviewed ticket-123'));
-assert.ok((await api(base+'/failures','GET',undefined,admin)).some(x=>x.reason==='self_approval_forbidden'));
+import assert from 'node:assert/strict';
+import { api, login } from './client.mjs';
+import { gm } from './gm-client.mjs';
+
+const a = await login();
+await api('/v1/games/sky-island/profile', 'GET', undefined, a.access_token);
+
+const admin = await gm();
+const reviewer = await gm('reviewer');
+const support = await gm('support');
+const base = '/gm/games/sky-island';
+const id = 'req' + Date.now();
+const body = { id, kind: 'reward', reason: 'ticket-123 compensation', payload: { players: [a.player_id], item: 'wood', amount: 7 } };
+
+await api(base + '/requests', 'POST', body, support, 403);
+await api(base + '/requests', 'POST', body, admin);
+await api(base + '/requests', 'POST', body, admin);
+await api(base + `/requests/${id}/approve`, 'POST', { reason: 'self check' }, admin, 403);
+await api(base + `/requests/${id}/approve`, 'POST', { reason: 'reviewed ticket-123' }, reviewer);
+await api(base + `/requests/${id}/approve`, 'POST', { reason: 'retry ticket-123' }, reviewer);
+
+assert.equal((await api('/v1/games/sky-island/mail', 'GET', undefined, a.access_token)).length, 1);
+await api(base + `/requests/${id}/cancel`, 'POST', { reason: 'too late' }, admin, 409);
+
+await api(base + '/requests', 'POST', { ...body, id: id + 'cancel' }, admin);
+await api(base + `/requests/${id}cancel/cancel`, 'POST', { reason: 'withdraw ticket' }, admin);
+
+const config = {
+  id: id + 'act',
+  version: 1,
+  kind: 'daily',
+  event_type: 'visit',
+  target: 1,
+  starts_at: 1,
+  ends_at: 4102444800,
+  client_allowed: true,
+  item: 'wood',
+  reward_amount: 2,
+};
+await api(base + '/requests', 'POST', { id: id + 'act', kind: 'activity', reason: 'publish daily', payload: config }, admin);
+await api(base + `/requests/${id}act/approve`, 'POST', { reason: 'review daily' }, reviewer);
+await api(base + '/requests', 'POST', { id: id + 'v2', kind: 'activity', reason: 'rollback via reviewed new version', payload: { ...config, version: 2 } }, admin);
+await api(base + `/requests/${id}v2/approve`, 'POST', { reason: 'review rollback' }, reviewer);
+
+assert.equal((await api(base + `/activities/${config.id}/versions`, 'GET', undefined, admin)).length, 2);
+await api(base + `/activities/${config.id}/stop`, 'POST', { reason: 'stop campaign' }, admin);
+await api(base + '/announcements/notice', 'PUT', { body: 'Welcome', expires_at: 4102444800, reason: 'publish notice' }, admin);
+
+assert.ok((await api(base + '/audit', 'GET', undefined, admin)).some((x) => x.action === 'request_approve' && x.reason === 'reviewed ticket-123'));
+assert.ok((await api(base + '/failures', 'GET', undefined, admin)).some((x) => x.reason === 'self_approval_forbidden'));
+
 console.log('S8 approval separation, request idempotency, cancellation, publish/rollback/stop, failures and audit: PASS');

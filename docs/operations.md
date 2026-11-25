@@ -10,7 +10,7 @@ MySQL DDL 不能通过普通事务完整回滚。本项目迁移以幂等 DDL/�
 docker compose -f deploy/compose.yaml exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysqldump -uminiverse --single-transaction --routines --triggers miniverse' > miniverse-backup.sql
 ```
 
-恢复先建立独立测试数据库，检查备份结构、版本和条数；不要直接覆盖正在使用的数据库。将备份导入新库并以独立端口启动 API，执行只读核查与端到端测试，再计划切换。当前仅执行了持久卷重启与依赖故障恢复，没有执行真实生产备份恢复。
+恢复先建立独立测试数据库，检查备份结构、版本和条数；不要直接覆盖正在使用的数据库。将备份导入新库并以独立端口启动 API，执行只读核查与端到端测试，再计划切换。本地可通过 `node scripts/backup-verify.mjs` 自动执行 mysqldump 导出、导入临时库 `miniverse_backup_verify`、校验 `schema_migrations`/`migration_files` 与核心表行数并清理临时库的全链路恢复演练。
 
 日志通过 `docker compose -f deploy/compose.yaml logs api` 查看，请求 ID 由服务端生成。不打印请求正文、令牌、凭证或数据库密码。健康检查和业务错误均记录状态及耗时。
 
@@ -20,4 +20,4 @@ docker compose -f deploy/compose.yaml exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_PAS
 
 已知容量取舍：榜单通过有序 LIMIT/OFFSET 返回 Top50/附近5名/结算前3名，Go 端不加载整榜；深位次附近查询和个人名次计数仍需数据库容量评估。GM 列表有固定上限；没有异步大规模广播，补发每批最多 100 人。需要生产容量时先依据观测数据优化和分页，而不是提前引入分布式中间件。
 
-玩家平台的 `launch_grants`、`game_sessions` 同样参与过期清理，每表遵循上述批次、缓冲和超时。自动构建、检查、镜像交付与运行诊断见 [DevOps](devops.md)。
+玩家平台的 `launch_grants`、`game_sessions` 以及防刷种子的 `match_tickets` 同样参与过期清理，每表遵循上述批次、缓冲和超时；同时周期清理 30 天前的 `ops_agent_runs`/`ops_agent_steps` 并为 `save_history` 保留最近 50 个版本。自动构建、检查、镜像交付与运行诊断见 [DevOps](devops.md)。

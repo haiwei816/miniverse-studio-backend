@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: miniverse
+    orgId: 1
+    folder: MiniVerse
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

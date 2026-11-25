@@ -40,4 +40,4 @@ for (const [key, path] of Object.entries({bgm: 'audio/魔女的暴富坩埚_2026
 writeFileSync(resolve(target, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(resolve(target, 'manifest.js'), 'globalThis.CauldronAssets = ' + JSON.stringify(manifest) + ';\n');
 writeFileSync(resolve(target, 'provenance.json'), JSON.stringify({source_project: '女巫的坩埚', source_paths_relative_to_project: true, assets: provenance}, null, 2) + '\n');
-console.log(`Imported ${provenance.length} original art assets; source project unchanged.`);
+console.log(`Imported ${provenance.length} original art assets; run "python scripts/optimize-cauldron-assets.py" to compress to WebP.`);

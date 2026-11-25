@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { probeHealth } from "./api.js";
+import { probeHealth, request, setSessionActive, onSessionLost } from "./api.js";
 import { validateApiBase } from "./desktop.js";
 
 test("probeHealth reports ok when both /health and /ready return JSON ok/ready", async () => {
@@ -96,5 +96,27 @@ test("validateApiBase restricts desktop API base to local loopback ports", () =>
     "http://127.0.0.1:18080/?x=1",
   ]) {
     assert.throws(() => validateApiBase(bad), (err) => err && err.code === "invalid_api_base", `accepted ${bad}`);
+  }
+});
+
+test("web requests include same-origin credentials and CSRF header on writes", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedInit = null;
+  let lost = 0;
+  globalThis.fetch = async (_path, init) => {
+    capturedInit = init;
+    return new Response(JSON.stringify({ error: "gm_unauthorized" }), { status: 401 });
+  };
+  setSessionActive(true);
+  onSessionLost(() => lost++);
+  try {
+    await assert.rejects(request("/gm/logout", { method: "POST" }), (err) => err && err.status === 401);
+    assert.equal(capturedInit.credentials, "same-origin");
+    assert.equal(capturedInit.headers["X-MiniVerse-CSRF"], "1");
+    assert.equal(lost, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setSessionActive(false);
+    onSessionLost(() => {});
   }
 });

@@ -1,6 +1,6 @@
 # MiniVerse Studio Backend
 
-Go 模块化单体 + MySQL 的多游戏工作室后端 MVP。基于原仓库 S0.1 增量实现，按 S0→S12 顺序执行并记录验收。包含 Godot 4 SDK、两游戏接入示例、Vue 3 GM 控制台（含 Tauri 2 桌面端）、审批审计、sandbox 渠道身份、mock 活动策划和可选 C++20/gRPC 规则服务。
+Go 模块化单体 + MySQL 的多游戏工作室后端 MVP，集成标准 MCP 服务与 AI Ops Agent 智能运维诊断能力。基于原仓库 S0.1 增量实现，按 S0→S12 顺序与后续平台化升级演进并记录验收。包含 Godot 4 SDK、两游戏接入示例、Vue 3 GM 控制台（含 Tauri 2 桌面端与 AI 运维控制台）、审批审计、sandbox 渠道身份、mock 活动策划、可选 C++20/gRPC 规则服务，以及运行期遥测 / MCP / AI Ops 排障闭环。
 
 **本地 MVP，不代表已上线。Steam/TapTap 真实认证与真实 AI 模型均未验证。** 详细结果以 [验收记录](docs/verification/RESULTS.md) 为准，不能把 sandbox 通过当作平台正式验收。
 
@@ -11,8 +11,11 @@ Go 模块化单体 + MySQL 的多游戏工作室后端 MVP。基于原仓库 S0.
 前置：Docker Desktop / Docker Engine + Compose v2。默认仅发布到本机，不需要在主机安装 Go、MySQL 或 C++。
 
 ```sh
-# 完整演示：后端、MySQL、GM 网页及可选规则服务
-docker compose -f deploy/compose.yaml --profile gm --profile rules up -d --build
+# 完整演示：后端、MySQL、GM 网页、玩家平台及可选规则服务
+docker compose -f deploy/compose.yaml --profile gm --profile player --profile rules up -d --build
+
+# 可选开启 Prometheus (19090) + Grafana (13000) 监控观测栈
+docker compose -f deploy/compose.yaml --profile observability up -d
 
 # 普通业务只需要 Go + MySQL
 docker compose -f deploy/compose.yaml up -d --build
@@ -59,9 +62,13 @@ Demo 是接入示例，不是完整游戏。账号恢复凭据由调用游戏接
 node tests/e2e.mjs
 node tests/recovery.mjs
 node tests/load.mjs
+node tests/ops-agent-mcp.mjs
+node tests/domain-loops.mjs
+node scripts/integration.mjs
+node scripts/backup-verify.mjs
 ```
 
-运行全套测试前需要启用 rules profile。测试会创建独立随机玩家/申请，保留测试数据。恢复测试会暂时重启本工程 API、停止/恢复 MySQL 与 RuleCore；不要对生产实例运行。压测是 100 次、10 并发的本地已认证档案读取，结果在 `docs/verification/load-results.json`，不代表生产容量。
+运行全套测试前需要启用 rules profile。`ops-agent-mcp.mjs` 会演练并验证奖励未到账 AI 排障与双人审批补偿、C++ RuleCore 短时停服恢复、`X-Request-ID` 异常日志关联、`/gm/mcp` RBAC 与 `/app/mcp` stdio 桥接（sandbox 下无外部 LLM Key 时诚实运行 `deterministic_playbook`）。测试会创建独立随机玩家/申请，保留测试数据。恢复测试会暂时重启本工程 API、停止/恢复 MySQL 与 RuleCore；不要对生产实例运行。压测是 100 次、10 并发的本地已认证档案读取，结果在 `docs/verification/load-results.json`，不代表生产容量。
 
 Go 检查（主机有 Go 1.27.3 时）：
 
@@ -109,6 +116,7 @@ npm run desktop:build  # 打包：src-tauri/target/release/bundle/
 ## 文档
 
 - [架构与数据流程](docs/architecture.md)
+- [MCP 服务与 AI Ops Agent 智能运维](docs/mcp-ops-agent.md)
 - [接口契约](docs/api.md)
 - [邮件与背包库存、消耗和流水](docs/mail-inventory.md)
 - [本地开发](docs/local-development.md)

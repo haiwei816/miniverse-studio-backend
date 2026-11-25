@@ -127,7 +127,7 @@ func TestValidatePayloadRewardBatchesProfileLookup(t *testing.T) {
 		Amount:  10,
 	})
 	req := httptest.NewRequest("POST", "/gm/games/sky-island/requests", nil)
-	if err := s.validatePayload(req, "sky-island", "reward", raw); err != nil {
+	if err := s.validatePayload(req.Context(), "sky-island", "reward", raw); err != nil {
 		t.Fatalf("validatePayload failed: %v", err)
 	}
 	if f.profileQueries != 1 {
@@ -138,7 +138,7 @@ func TestValidatePayloadRewardBatchesProfileLookup(t *testing.T) {
 		Item:    "wood",
 		Amount:  10,
 	})
-	if err := s.validatePayload(req, "sky-island", "reward", emptyPlayerRaw); err == nil || err.Error() != "unknown_player" {
+	if err := s.validatePayload(req.Context(), "sky-island", "reward", emptyPlayerRaw); err == nil || err.Error() != "unknown_player" {
 		t.Fatalf("expected unknown_player for empty player ID, got %v", err)
 	}
 }

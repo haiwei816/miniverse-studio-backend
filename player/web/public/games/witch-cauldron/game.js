@@ -376,7 +376,7 @@
       openModal('哎呀，坩埚炸锅了', [node('p', '这一锅的加成收益化成了烟，不过你已经存下的金币、材料反应和成长都还在。'), stats([['本锅炸锅概率', `${state.brewRiskAtOpen}%`], ['保温收回', `${number(state.brewRefund)} 币`], ['已存金币', `${number(state.coins)} 币`], ['基础收入', `${number(state.basePayout)} 币`]])], [button('结束这一锅，选择新材料', () => act('finishExplosion'), 'primary')], true);
     } else if (state.phase === 'tax') {
       const content = [node('p', '死神敲了敲工坊的门。交齐这一夜的房租，你就能保住坩埚，迎接新的材料和遗物。'), stats([['本夜房租', `${number(state.rent)} 币`], ['现有金币', `${number(state.coins)} 币`]])];
-      const image = node('img', undefined, 'result-art'); image.src = 'assets/reaper.png'; image.alt = '前来收租的死神'; content.unshift(image);
+      const image = node('img', undefined, 'result-art'); image.src = assets.theme?.reaper || 'assets/reaper.webp'; image.alt = '前来收租的死神'; content.unshift(image);
       if (state.round === catalog.balance.winRound && state.bossPlan) content.push(node('p', `终局决战：已完成 ${state.bossPlan.broken} 阶秘药，预计伤害 ${number(state.bossPlan.damage)} / ${number(state.bossPlan.hp)}。交租后将按本夜收益和秘药进度结算。`, 'inline-note'));
       openModal('死神的账单', content, [button(`交房租 ${number(state.rent)} 币`, () => act('pay'), 'primary')], true);
     } else if (state.phase === 'reward') {

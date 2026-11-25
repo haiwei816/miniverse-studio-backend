@@ -1,6 +1,8 @@
 let token = '';
+let cookieSession = false;
 let onLost = () => {};
 export function setToken(value) { token = value || ''; }
+export function setCookieSession(active) { cookieSession = Boolean(active); }
 export function onSessionLost(fn) { onLost = fn; }
 export const messages = {
   invalid_credentials: '账号或密码不正确', username_taken: '这个账号已被使用', invalid_username: '账号需为 3–32 位字母、数字或下划线',
@@ -10,18 +12,24 @@ export const messages = {
   invalid_credentials_format: '账号需为 3–32 位字母、数字、下划线或短横线，首位为字母或数字；密码需为 8–128 位',
   ai_not_configured: 'AI 服务尚未配置，请稍后再试', internal_error: '服务暂时不可用，请稍后重试',
   invalid_companion: '请检查伙伴名称和风格', context_expired: '游戏上下文已更新，请重新进入游戏',
+  csrf_rejected: '安全校验未通过，请刷新页面后重试', account_suspended: '账号当前处于封禁状态',
 };
-export async function request(path, method = 'GET', body, { anonymous = false } = {}) {
+export async function request(path, method = 'GET', body, { anonymous = false, skipUnauthorized = false } = {}) {
+  const upperMethod = String(method || 'GET').toUpperCase();
   const requestToken = anonymous ? '' : token;
+  const useCookie = !anonymous && !requestToken;
   const headers = { 'Content-Type': 'application/json' };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
+  if (!anonymous && upperMethod !== 'GET' && upperMethod !== 'HEAD') headers['X-MiniVerse-CSRF'] = '1';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45000);
   try {
-    const res = await fetch(path, { method, headers, signal: controller.signal, body: body === undefined ? undefined : JSON.stringify(body) });
+    const fetchOpts = { method: upperMethod, headers, signal: controller.signal, body: body === undefined ? undefined : JSON.stringify(body) };
+    if (!anonymous) fetchOpts.credentials = 'same-origin';
+    const res = await fetch(path, fetchOpts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (res.status === 401 && requestToken && token === requestToken) onLost();
+      if (res.status === 401 && !skipUnauthorized && ((requestToken && token === requestToken) || (useCookie && cookieSession))) onLost();
       const error = new Error(messages[data.error] || (res.status === 501 ? '此功能已预留接口，尚未接入' : `请求失败（${data.error || res.status}）`));
       error.code = data.error; error.status = res.status; throw error;
     }

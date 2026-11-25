@@ -4,6 +4,7 @@
 import { isDesktop, desktopFetch } from "./desktop.js";
 
 let token = "";
+let hasSession = false;
 let unauthorized = () => {};
 let demo = null;
 
@@ -20,6 +21,10 @@ export function setToken(value) {
   token = value || "";
 }
 
+export function setSessionActive(active) {
+  hasSession = Boolean(active);
+}
+
 export function getToken() {
   return token;
 }
@@ -32,28 +37,30 @@ export function installDemo(handler) {
   demo = handler;
 }
 
-export async function request(path, { method = "GET", body, expectJson = false, signal } = {}) {
+export async function request(path, { method = "GET", body, expectJson = false, signal, skipUnauthorized = false } = {}) {
   if (demo) return demo(path, { method, body });
+  const upperMethod = String(method || "GET").toUpperCase();
+  const desktop = isDesktop();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: "Bearer " + token } : {}),
+    ...(!desktop && upperMethod !== "GET" && upperMethod !== "HEAD" ? { "X-MiniVerse-CSRF": "1" } : {}),
+  };
   let response;
   try {
     // Desktop shell: the request goes through Rust, so no CORS preflight and
-    // the API stays on 127.0.0.1 only. Web build keeps the same-origin fetch.
-    response = isDesktop()
+    // the API stays on 127.0.0.1 only. Web build uses same-origin HttpOnly cookies.
+    response = desktop
       ? await desktopFetch(path, {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: "Bearer " + token } : {}),
-          },
+          method: upperMethod,
+          headers,
           body: body === undefined ? undefined : JSON.stringify(body),
           signal,
         })
       : await fetch(path, {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: "Bearer " + token } : {}),
-          },
+          method: upperMethod,
+          credentials: "same-origin",
+          headers,
           body: body === undefined ? undefined : JSON.stringify(body),
           signal,
         });
@@ -68,7 +75,7 @@ export async function request(path, { method = "GET", body, expectJson = false, 
     payload = null;
   }
   if (!response.ok) {
-    if (response.status === 401 && token) unauthorized();
+    if (response.status === 401 && !skipUnauthorized && (token || hasSession)) unauthorized();
     throw new ApiError(payload && payload.error ? payload.error : "http_" + response.status, response.status);
   }
   if (expectJson && (!payload || typeof payload !== "object")) {

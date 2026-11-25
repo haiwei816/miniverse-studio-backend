@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -14,7 +15,35 @@ type RewardRequest struct {
 	Amount  int64    `json:"amount"`
 }
 
-func (s *Service) validatePayload(r *http.Request, g, kind string, raw json.RawMessage) error {
+type ActivityStopRequest struct {
+	ActivityID string `json:"activity_id"`
+}
+
+type BoardUpsertRequest struct {
+	ID            string `json:"id"`
+	Season        string `json:"season"`
+	Mode          string `json:"mode"`
+	Starts        int64  `json:"starts_at"`
+	Ends          int64  `json:"ends_at"`
+	Frozen        bool   `json:"frozen"`
+	Item          string `json:"item"`
+	Reward        int64  `json:"reward_amount"`
+	RuleVersion   string `json:"rule_version,omitempty"`
+	RequireTicket bool   `json:"require_ticket,omitempty"`
+}
+
+type SeasonSettleRequest struct {
+	Board  string `json:"board"`
+	Season string `json:"season"`
+}
+
+type PlayerBanRequest struct {
+	PlayerID  string `json:"player_id"`
+	Reason    string `json:"reason"`
+	ExpiresAt *int64 `json:"expires_at,omitempty"`
+}
+
+func (s *Service) validatePayload(ctx context.Context, g, kind string, raw json.RawMessage) error {
 	switch kind {
 	case "reward":
 		var b RewardRequest
@@ -22,7 +51,7 @@ func (s *Service) validatePayload(r *http.Request, g, kind string, raw json.RawM
 			return bad(400, "invalid_reward_request")
 		}
 		var n int
-		if e := s.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, b.Item).Scan(&n); e != nil {
+		if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, b.Item).Scan(&n); e != nil {
 			return e
 		}
 		if n != 1 {
@@ -47,7 +76,7 @@ func (s *Service) validatePayload(r *http.Request, g, kind string, raw json.RawM
 			placeholders[i] = "?"
 			args = append(args, p)
 		}
-		if e := s.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM profiles WHERE game_id=? AND player_id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&n); e != nil {
+		if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM profiles WHERE game_id=? AND player_id IN ("+strings.Join(placeholders, ",")+")", args...).Scan(&n); e != nil {
 			return e
 		}
 		if n != len(unique) {
@@ -62,17 +91,115 @@ func (s *Service) validatePayload(r *http.Request, g, kind string, raw json.RawM
 			return e
 		}
 		var n int
-		if e = s.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, a.Item).Scan(&n); e != nil {
+		if e = s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, a.Item).Scan(&n); e != nil {
 			return e
 		}
 		if a.Amount > 0 && n != 1 {
 			return bad(400, "unknown_item")
+		}
+	case "activity_stop":
+		var b ActivityStopRequest
+		if e := json.Unmarshal(raw, &b); e != nil || strings.TrimSpace(b.ActivityID) == "" || len(b.ActivityID) > 64 {
+			return bad(400, "invalid_activity_stop")
+		}
+		var n int
+		if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM activities WHERE game_id=? AND id=?", g, b.ActivityID).Scan(&n); e != nil {
+			return e
+		}
+		if n != 1 {
+			return bad(404, "activity_not_found")
+		}
+	case "board_upsert":
+		var b BoardUpsertRequest
+		if e := json.Unmarshal(raw, &b); e != nil || strings.TrimSpace(b.ID) == "" || len(b.ID) > 64 || strings.TrimSpace(b.Season) == "" || len(b.Season) > 64 || b.Starts >= b.Ends || (b.Mode != "max" && b.Mode != "min" && b.Mode != "sum") || b.Reward < 0 || b.Reward > 1000000 || len(b.RuleVersion) > 32 {
+			return bad(400, "invalid_board")
+		}
+		if b.Reward > 0 {
+			var n int
+			if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, b.Item).Scan(&n); e != nil {
+				return e
+			}
+			if n != 1 {
+				return bad(400, "unknown_item")
+			}
+		}
+		if b.RuleVersion != "" && b.RuleVersion != "card-v1" {
+			return bad(400, "invalid_board")
+		}
+	case "season_settle":
+		var b SeasonSettleRequest
+		if e := json.Unmarshal(raw, &b); e != nil || strings.TrimSpace(b.Board) == "" || len(b.Board) > 64 || strings.TrimSpace(b.Season) == "" || len(b.Season) > 64 {
+			return bad(400, "invalid_board")
+		}
+		var settled bool
+		var end int64
+		if e := s.DB.QueryRowContext(ctx, "SELECT settled,ends_at FROM boards WHERE game_id=? AND id=? AND season=?", g, b.Board, b.Season).Scan(&settled, &end); e != nil {
+			return bad(404, "board_not_found")
+		}
+		if settled {
+			return bad(409, "season_already_settled")
+		}
+		if time.Now().Unix() < end {
+			return bad(409, "season_still_open")
+		}
+	case "player_ban":
+		var b PlayerBanRequest
+		if e := json.Unmarshal(raw, &b); e != nil || strings.TrimSpace(b.PlayerID) == "" || len(b.PlayerID) > 64 {
+			return bad(400, "invalid_player_ban")
+		}
+		trimmed := strings.TrimSpace(b.Reason)
+		if len(trimmed) < 3 || len(trimmed) > 256 {
+			return bad(400, "reason_required")
+		}
+		if b.ExpiresAt != nil && *b.ExpiresAt <= time.Now().Unix() {
+			return bad(400, "invalid_ban_expiry")
+		}
+		var n int
+		if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM profiles WHERE game_id=? AND player_id=?", g, b.PlayerID).Scan(&n); e != nil {
+			return e
+		}
+		if n != 1 {
+			return bad(404, "player_not_found")
 		}
 	default:
 		return bad(400, "invalid_request_kind")
 	}
 	return nil
 }
+
+func (s *Service) createGMRequest(ctx context.Context, a GM, id, kind, reason string, payload json.RawMessage) (string, error) {
+	if id == "" || len(id) > 64 {
+		return "", bad(400, "invalid_request_id")
+	}
+	if e := s.validatePayload(ctx, a.Game, kind, payload); e != nil {
+		return "", e
+	}
+	e := s.transaction(ctx, func(tx *sql.Tx) error {
+		var creator, existingKind string
+		var old []byte
+		e := tx.QueryRowContext(ctx, "SELECT creator,kind,payload FROM gm_requests WHERE game_id=? AND id=? FOR UPDATE", a.Game, id).Scan(&creator, &existingKind, &old)
+		if e == nil {
+			var x, y any
+			json.Unmarshal(old, &x)
+			json.Unmarshal(payload, &y)
+			cx, _ := json.Marshal(x)
+			cy, _ := json.Marshal(y)
+			if creator != a.ID || existingKind != kind || string(cx) != string(cy) {
+				return bad(409, "idempotency_conflict")
+			}
+			return nil
+		}
+		if e != sql.ErrNoRows {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO gm_requests(game_id,id,kind,creator,state,reason,payload,created_at) VALUES(?,?,?,?,'pending',?,?,?)", a.Game, id, kind, a.ID, reason, payload, time.Now().Unix()); e != nil {
+			return e
+		}
+		return auditCtx(ctx, tx, a, "request_created", reason, map[string]any{"request_id": id, "kind": kind})
+	})
+	return id, e
+}
+
 func (s *Service) operationsRoutes(m *http.ServeMux) {
 	base := "/gm/games/{game}"
 	s.handle(m, "POST "+base+"/requests", func(r *http.Request) (any, error) {
@@ -89,43 +216,15 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 		if e = decode(r, &b); e != nil {
 			return nil, e
 		}
-		if b.ID == "" || len(b.ID) > 64 {
-			return nil, bad(400, "invalid_request_id")
-		}
-		if e = s.validatePayload(r, a.Game, b.Kind, b.Payload); e != nil {
-			return nil, e
-		}
-		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
-			var creator, kind string
-			var old []byte
-			e := tx.QueryRowContext(r.Context(), "SELECT creator,kind,payload FROM gm_requests WHERE game_id=? AND id=? FOR UPDATE", a.Game, b.ID).Scan(&creator, &kind, &old)
-			if e == nil {
-				var x, y any
-				json.Unmarshal(old, &x)
-				json.Unmarshal(b.Payload, &y)
-				cx, _ := json.Marshal(x)
-				cy, _ := json.Marshal(y)
-				if creator != a.ID || kind != b.Kind || string(cx) != string(cy) {
-					return bad(409, "idempotency_conflict")
-				}
-				return nil
-			}
-			if e != sql.ErrNoRows {
-				return e
-			}
-			if _, e = tx.ExecContext(r.Context(), "INSERT INTO gm_requests(game_id,id,kind,creator,state,reason,payload,created_at) VALUES(?,?,?,?,'pending',?,?,?)", a.Game, b.ID, b.Kind, a.ID, b.Reason, b.Payload, time.Now().Unix()); e != nil {
-				return e
-			}
-			return audit(r, tx, a, "request_created", b.Reason, map[string]any{"request_id": b.ID, "kind": b.Kind})
-		})
-		return map[string]string{"id": b.ID}, e
+		id, e := s.createGMRequest(r.Context(), a, b.ID, b.Kind, b.Reason, b.Payload)
+		return map[string]string{"id": id}, e
 	})
 	s.handle(m, "GET "+base+"/requests", func(r *http.Request) (any, error) {
 		a, e := s.gm(r, "read")
 		if e != nil {
 			return nil, e
 		}
-		rows, e := s.DB.QueryContext(r.Context(), "SELECT id,kind,creator,COALESCE(reviewer,''),state,reason,payload FROM gm_requests WHERE game_id=? ORDER BY created_at DESC,id LIMIT 200", a.Game)
+		rows, e := s.DB.QueryContext(r.Context(), "SELECT id,kind,creator,COALESCE(reviewer,''),state,reason,payload,created_at FROM gm_requests WHERE game_id=? ORDER BY created_at DESC,id LIMIT 200", a.Game)
 		if e != nil {
 			return nil, e
 		}
@@ -134,10 +233,11 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 		for rows.Next() {
 			var id, kind, creator, reviewer, state, reason string
 			var payload json.RawMessage
-			if e = rows.Scan(&id, &kind, &creator, &reviewer, &state, &reason, &payload); e != nil {
+			var createdAt int64
+			if e = rows.Scan(&id, &kind, &creator, &reviewer, &state, &reason, &payload, &createdAt); e != nil {
 				return nil, e
 			}
-			out = append(out, map[string]any{"id": id, "kind": kind, "creator": creator, "reviewer": reviewer, "state": state, "reason": reason, "payload": payload})
+			out = append(out, map[string]any{"id": id, "kind": kind, "creator": creator, "reviewer": reviewer, "state": state, "reason": reason, "payload": payload, "created_at": createdAt})
 		}
 		return out, rows.Err()
 	})
@@ -205,6 +305,50 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 							return e
 						}
 						if _, e = tx.ExecContext(r.Context(), "INSERT INTO activities(game_id,id,version,config,active) VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE version=VALUES(version),config=VALUES(config),active=TRUE", a.Game, v.ID, v.Version, raw); e != nil {
+							return e
+						}
+					case "activity_stop":
+						var v ActivityStopRequest
+						if e := json.Unmarshal(raw, &v); e != nil {
+							return e
+						}
+						var exists int
+						if e := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM activities WHERE game_id=? AND id=? FOR UPDATE", a.Game, v.ActivityID).Scan(&exists); e != nil {
+							return e
+						}
+						if exists != 1 {
+							return bad(404, "activity_not_found")
+						}
+						if _, e := tx.ExecContext(r.Context(), "UPDATE activities SET active=FALSE WHERE game_id=? AND id=?", a.Game, v.ActivityID); e != nil {
+							return e
+						}
+					case "board_upsert":
+						var v BoardUpsertRequest
+						if e := json.Unmarshal(raw, &v); e != nil {
+							return e
+						}
+						if _, e := tx.ExecContext(r.Context(), "INSERT INTO boards(game_id,id,season,mode,starts_at,ends_at,frozen,settled,item,reward_amount) VALUES(?,?,?,?,?,?,?,FALSE,?,?) ON DUPLICATE KEY UPDATE mode=VALUES(mode),starts_at=VALUES(starts_at),ends_at=VALUES(ends_at),frozen=VALUES(frozen),item=VALUES(item),reward_amount=VALUES(reward_amount)", a.Game, v.ID, v.Season, v.Mode, v.Starts, v.Ends, v.Frozen, v.Item, v.Reward); e != nil {
+							return e
+						}
+						if v.RuleVersion != "" {
+							if _, e := tx.ExecContext(r.Context(), "INSERT INTO rule_boards(game_id,board_id,season,rule_version,require_ticket) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE rule_version=VALUES(rule_version),require_ticket=VALUES(require_ticket)", a.Game, v.ID, v.Season, v.RuleVersion, v.RequireTicket); e != nil {
+								return e
+							}
+						}
+					case "season_settle":
+						var v SeasonSettleRequest
+						if e := json.Unmarshal(raw, &v); e != nil {
+							return e
+						}
+						if e := settleBoardTx(r.Context(), tx, a.Game, v.Board, v.Season); e != nil {
+							return e
+						}
+					case "player_ban":
+						var v PlayerBanRequest
+						if e := json.Unmarshal(raw, &v); e != nil {
+							return e
+						}
+						if e := s.applyPlayerBanTx(r.Context(), tx, a, v.PlayerID, v.Reason, v.ExpiresAt); e != nil {
 							return e
 						}
 					}

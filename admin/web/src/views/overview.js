@@ -193,7 +193,7 @@ export const OverviewView = defineComponent({
               <div class="list-row" v-for="row in pending.slice(0,4)" :key="row.id">
                 <span class="pill" data-tone="warn">待审核</span>
                 <div class="list-main">
-                  <div class="list-title">{{ row.kind === 'reward' ? '补发奖励' : '活动配置' }}</div>
+                  <div class="list-title">{{ row.kind === 'reward' ? '补发奖励' : row.kind === 'activity_stop' ? '停用活动' : '活动配置' }}</div>
                   <div class="list-meta">{{ row.reason || '未填写原因' }} · {{ relative(row.created_at) }}</div>
                 </div>
               </div>

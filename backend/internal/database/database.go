@@ -7,7 +7,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-const ExpectedSchemaVersion = 19
+const ExpectedSchemaVersion = 25
 
 func Open(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)

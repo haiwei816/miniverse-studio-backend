@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { request, setToken, onSessionLost } from './api.js';
+import { request, setToken, setCookieSession, onSessionLost } from './api.js';
 
 test('a delayed 401 from an old account cannot sign out the new account', async () => {
   const originalFetch=globalThis.fetch;
@@ -35,4 +35,28 @@ test('anonymous authentication failures do not invalidate a signed-in session', 
   setToken('signed-in');onSessionLost(()=>lost++);
   try {await assert.rejects(request('/v1/platform/auth/login','POST',{}, {anonymous:true}));assert.equal(lost,0);}
   finally {globalThis.fetch=originalFetch;setToken('');onSessionLost(()=>{});}
+});
+
+test('cookie-backed player requests include credentials and CSRF header on writes', async () => {
+  const originalFetch = globalThis.fetch;
+  let captured = null;
+  let lost = 0;
+  globalThis.fetch = async (_path, options) => {
+    captured = options;
+    return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+  };
+  setToken('');
+  setCookieSession(true);
+  onSessionLost(() => { lost++; setCookieSession(false); });
+  try {
+    await assert.rejects(request('/v1/platform/auth/logout', 'POST', {}));
+    assert.equal(captured.credentials, 'same-origin');
+    assert.equal(captured.headers['X-MiniVerse-CSRF'], '1');
+    assert.equal(captured.headers.Authorization, undefined);
+    assert.equal(lost, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setCookieSession(false);
+    onSessionLost(() => {});
+  }
 });

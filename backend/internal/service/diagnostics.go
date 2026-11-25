@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"miniverse/backend/internal/httpserver"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +16,9 @@ func (s *Service) recordFailure(r *http.Request, code string) {
 	}
 	action, actor := "", ""
 	details := map[string]string{"path": r.URL.Path, "method": r.Method, "error": code}
+	if reqID := httpserver.RequestID(r.Context()); reqID != "" {
+		details["request_id"] = reqID
+	}
 	if strings.HasPrefix(r.URL.Path, "/gm/") && r.Method != "GET" {
 		a, e := s.gm(r, "read")
 		if e != nil {

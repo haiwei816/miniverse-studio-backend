@@ -33,6 +33,12 @@ services:
       COMPANION_CHAT_URL: ${COMPANION_CHAT_URL:-}
       COMPANION_API_KEY: ${COMPANION_API_KEY:-}
       COMPANION_MODEL: ${COMPANION_MODEL:-}
+      OPS_AGENT_PROTOCOL: ${OPS_AGENT_PROTOCOL:-}
+      OPS_AGENT_URL: ${OPS_AGENT_URL:-}
+      OPS_AGENT_API_KEY: ${OPS_AGENT_API_KEY:-}
+      OPS_AGENT_MODEL: ${OPS_AGENT_MODEL:-}
+      OPS_AGENT_SECRET_KEY: ${OPS_AGENT_SECRET_KEY:-}
+      METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-sandbox-metrics-scrape-token}
     depends_on:
       mysql: {condition: service_healthy}
   api:
@@ -41,6 +47,7 @@ services:
     stop_grace_period: 15s
     build: {context: .., dockerfile: deploy/Dockerfile}
     environment: *api_env
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["127.0.0.1:${API_PORT:-18080}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -80,5 +87,28 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    logging: *bounded_logs
+    profiles: [observability]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-19090}:9090"]
+    depends_on:
+      api: {condition: service_healthy}
+  grafana:
+    image: grafana/grafana:11.2.2
+    logging: *bounded_logs
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-sandbox-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:${GRAFANA_PORT:-13000}:3000"]
+    depends_on:
+      - prometheus
 volumes:
   mysql_data:

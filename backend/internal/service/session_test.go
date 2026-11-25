@@ -251,3 +251,49 @@ func TestBothLogoutRoutesClearWorldAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayerCookieSessionAndCSRF(t *testing.T) {
+	f := &sessionFixture{rows: map[string]sessionRecord{}}
+	db := sql.OpenDB(f)
+	defer db.Close()
+	s := New(db, true)
+	f.rows[s.sessionHash("cookie-tok")] = sessionRecord{"player-1", time.Now().Add(time.Hour).Unix()}
+
+	mux := http.NewServeMux()
+	s.identityRoutes(mux)
+	s.handle(mux, "GET /private", func(r *http.Request) (any, error) {
+		p, err := s.actor(r)
+		return map[string]string{"player_id": p}, err
+	})
+
+	// GET works with HttpOnly cookie without CSRF header.
+	getReq := httptest.NewRequest("GET", "/private", nil)
+	getReq.AddCookie(&http.Cookie{Name: "mv_player_session", Value: "cookie-tok"})
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != 200 || !strings.Contains(getRec.Body.String(), `"player_id":"player-1"`) {
+		t.Fatalf("GET with player cookie failed: status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+
+	// POST with cookie but without X-MiniVerse-CSRF is rejected.
+	noCSRF := httptest.NewRequest("POST", "/v1/auth/logout", nil)
+	noCSRF.AddCookie(&http.Cookie{Name: "mv_player_session", Value: "cookie-tok"})
+	noCSRFRec := httptest.NewRecorder()
+	mux.ServeHTTP(noCSRFRec, noCSRF)
+	if noCSRFRec.Code != 403 || !strings.Contains(noCSRFRec.Body.String(), "csrf_rejected") {
+		t.Fatalf("expected 403 csrf_rejected, got status=%d body=%s", noCSRFRec.Code, noCSRFRec.Body.String())
+	}
+
+	// POST with cookie and CSRF revokes session and clears cookie.
+	logoutReq := httptest.NewRequest("POST", "/v1/auth/logout", nil)
+	logoutReq.AddCookie(&http.Cookie{Name: "mv_player_session", Value: "cookie-tok"})
+	logoutReq.Header.Set("X-MiniVerse-CSRF", "1")
+	logoutRec := httptest.NewRecorder()
+	mux.ServeHTTP(logoutRec, logoutReq)
+	if logoutRec.Code != 200 {
+		t.Fatalf("POST logout with cookie+CSRF failed: status=%d body=%s", logoutRec.Code, logoutRec.Body.String())
+	}
+	if _, retained := f.rows[s.sessionHash("cookie-tok")]; retained {
+		t.Fatal("cookie logout did not revoke session")
+	}
+}

@@ -1,6 +1,6 @@
 # HTTP v1 接口契约
 
-JSON 请求使用 Content-Type: application/json。会话通过 Authorization: Bearer TOKEN 传递。未知字段/多段 JSON 拒绝。请求正文最多 2 MiB；存档解压后最多 1 MiB。业务错误为 `{"error":"code"}`；400 输入、401 身份、403 权限、404 资源、409 版本/状态/幂等冲突、410 邮件过期、422 非法回放、429 限流、503 依赖不可用。服务端返回 X-Request-ID。
+JSON 请求使用 Content-Type: application/json。会话支持 `Authorization: Bearer TOKEN`，Web 端亦使用 `HttpOnly; SameSite=Strict` Cookie（`mv_player_session` / `mv_gm_session`）配合写操作请求头 `X-MiniVerse-CSRF: 1`。未知字段/多段 JSON 拒绝。请求正文最多 2 MiB；存档解压后最多 1 MiB。业务错误为 `{"error":"code"}`；400 输入、401 身份、403 权限/封禁/CSRF、404 资源、409 版本/状态/幂等冲突、410 邮件过期、422 非法回放/种子不匹配、429 限流、503 依赖不可用。服务端返回 X-Request-ID。
 
 下表中的 `{game}` 是 sky-island 或 card-game。普通玩家接口不会接受请求正文中的 player_id 替换会话身份。
 
@@ -22,7 +22,7 @@ JSON 请求使用 Content-Type: application/json。会话通过 Authorization: B
 | POST /v1/games/{game}/events | event_id、event_type、amount；来源由服务端固定为 client |
 | POST /v1/games/{game}/activities/{activity}/reward | 对已完成活动补建幂等奖励；正常事件完成会自动生成 |
 | GET /v1/games/{game}/mail | 附件、过期、领取、read 状态；未删除的最近 200 封，支持 filter=all/unread/unclaimed 与 limit |
-| GET /v1/games/{game}/mail/page | ??????? filter?limit?cursor??? items ? next_cursor?????????? |
+| GET /v1/games/{game}/mail/page | 游标分页邮件，支持 filter、limit、cursor，返回 items 与 next_cursor |
 | POST /v1/games/{game}/mail/{mail}/claim | 邮件领取与权威库存入账同一事务；重复返回成功 |
 | POST /v1/games/{game}/mail/{mail}/read | 标记已读，不领取附件 |
 | DELETE /v1/games/{game}/mail/{mail} | 软删除；有效未领附件返回409，过期或已领可删除 |
@@ -38,7 +38,8 @@ JSON 请求使用 Content-Type: application/json。会话通过 Authorization: B
 | GET /v1/games/{game}/announcements | 未过期公告 |
 | POST /v1/sandbox/tickets/{channel} | sandbox 凭证：game_id、subject；channel=steam/taptap |
 | POST /v1/platform/{channel}/login、bind、unbind | game_id、ticket；绑定/解绑还需已有玩家会话 |
-| POST /v1/games/card-game/replays/validate | version、seed、actions；可选 claimed_score、request_id、board、season；见 rulecore.md |
+| POST /v1/games/card-game/matches/start | 签发服务端随机 seed 与一次性开局票据 match_id（15 分钟有效） |
+| POST /v1/games/card-game/replays/validate | version、seed、actions；可选 claimed_score、request_id、board、season、match_id（ranked 榜强制要求票据，返回 trust=server_seeded_replay） |
 
 ## GM 会话与授权
 
@@ -48,10 +49,12 @@ GM token 和玩家 token 完全分离。POST /gm/login 接受 username、passwor
 |---|---|
 | GET /overview | 看板统计：玩家、有效会话玩家、存档、待领邮件、活跃活动、有余额道具、待审申请、24h 审计/失败/发奖，以及 7 天（UTC 分桶）审计与发奖序列；全部为服务端计数。为兼容已有客户端，`totals.online` 字段名保持不变，表示具有未过期会话且拥有该游戏资料的不同玩家数，并非实时在线人数。 |
 | GET /players?q= | 按 UID/名称查询，最多 100 条 |
-| GET /players/{player} | 档案、存档槽版本、奖励流水、库存、最近50条库存流水和最近100封邮件（含删除状态） |
+| GET /players/{player} | 档案、封禁状态（ban）、存档槽版本、最近100条奖励流水、库存、最近50条库存流水和最近100封邮件 |
+| POST /players/{player}/ban、unban | admin/reviewer 执行封禁或解封；封禁时原子吊销 sessions/game_sessions/launch_grants 并写审计 |
 | GET /audit | 最近 200 条管理写操作审计 |
 | GET /failures | 授权游戏的失败管理操作和非法分数/回放异常；不记录凭据或请求正文 |
-| POST /requests | id、kind=reward/activity、reason、payload；稳定 id 防重复，变更 payload 返回409 |
+| GET /boards | 查看当前游戏的排行榜配置、规则校验版本、require_ticket 与结算状态 |
+| POST /requests | id、kind=reward/activity/activity_stop/board_upsert/season_settle/player_ban、reason、payload；稳定 id 防重复，变更 payload 返回409 |
 | GET /requests | 申请状态与执行记录 |
 | POST /requests/{id}/approve、cancel | reason 必填；独立审核通过时原子发奖/发布并审计 |
 | POST /activities/{id}/stop | reason；停止活动 |

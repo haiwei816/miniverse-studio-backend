@@ -1,0 +1,62 @@
+{
+  "uid": "miniverse-overview",
+  "title": "MiniVerse Studio Backend Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "HTTP Requests Total",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "miniverse_http_requests_total", "legendFormat": "requests" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "5m HTTP Error Rate",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "miniverse_http_5m_error_rate", "legendFormat": "error_rate" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Schema Version",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "miniverse_schema_version", "legendFormat": "schema" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "RuleCore Calls / Errors",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "miniverse_rulecore_calls_total", "legendFormat": "calls" },
+        { "expr": "miniverse_rulecore_errors_total", "legendFormat": "errors" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP 5m Latency Percentiles (ms)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "miniverse_http_latency_p50_ms", "legendFormat": "P50" },
+        { "expr": "miniverse_http_latency_p95_ms", "legendFormat": "P95" },
+        { "expr": "miniverse_http_latency_p99_ms", "legendFormat": "P99" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "MySQL Pool Open / In Use",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "miniverse_db_connections_open", "legendFormat": "open" },
+        { "expr": "miniverse_db_connections_in_use", "legendFormat": "in_use" }
+      ]
+    }
+  ]
+}

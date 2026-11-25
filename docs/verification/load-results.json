@@ -1,13 +1,54 @@
 {
-  "date": "2026-11-06T12:21:04.474Z",
-  "scope": "local Docker sandbox, authenticated profile reads, no production capacity claim",
-  "requests": 100,
-  "concurrency": 10,
-  "errors": 0,
-  "error_details": [],
-  "elapsed_ms": 130.3043,
-  "requests_per_second": 767.4343824417152,
-  "p50_ms": 11.814300000000003,
-  "p95_ms": 29.470900000000015,
-  "p99_ms": 31.512699999999995
+  "date": "2026-11-25T12:11:03.914Z",
+  "scope": "local Docker sandbox multi-scenario benchmark, no production capacity claim",
+  "scenarios": [
+    {
+      "name": "profile_read_c10",
+      "requests": 100,
+      "concurrency": 10,
+      "errors": 0,
+      "error_details": [],
+      "elapsed_ms": 118.09,
+      "requests_per_second": 846.84,
+      "p50_ms": 8.57,
+      "p95_ms": 25.77,
+      "p99_ms": 35.05
+    },
+    {
+      "name": "profile_read_c50",
+      "requests": 200,
+      "concurrency": 50,
+      "errors": 0,
+      "error_details": [],
+      "elapsed_ms": 180.29,
+      "requests_per_second": 1109.35,
+      "p50_ms": 35.7,
+      "p95_ms": 77.78,
+      "p99_ms": 82.57
+    },
+    {
+      "name": "leaderboard_read_c25",
+      "requests": 150,
+      "concurrency": 25,
+      "errors": 0,
+      "error_details": [],
+      "elapsed_ms": 97.1,
+      "requests_per_second": 1544.81,
+      "p50_ms": 15.75,
+      "p95_ms": 20.67,
+      "p99_ms": 22.79
+    },
+    {
+      "name": "gm_audit_trace_c20",
+      "requests": 100,
+      "concurrency": 20,
+      "errors": 0,
+      "error_details": [],
+      "elapsed_ms": 64.03,
+      "requests_per_second": 1561.73,
+      "p50_ms": 12.08,
+      "p95_ms": 17.93,
+      "p99_ms": 19.5
+    }
+  ]
 }

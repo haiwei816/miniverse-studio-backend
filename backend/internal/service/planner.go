@@ -104,7 +104,7 @@ func (s *Service) plannerRoutes(m *http.ServeMux) {
 		if e = schemaCheck(b.Config); e != nil {
 			return nil, e
 		}
-		if e = s.validatePayload(r, a.Game, "activity", b.Config); e != nil {
+		if e = s.validatePayload(r.Context(), a.Game, "activity", b.Config); e != nil {
 			return nil, e
 		}
 		v, e := readActivity(b.Config)
@@ -167,7 +167,7 @@ func (s *Service) plannerRoutes(m *http.ServeMux) {
 			candidate.Target = 0
 		}
 		raw, _ := json.Marshal(candidate)
-		firstPass := schemaCheck(raw) == nil && s.validatePayload(r, a.Game, "activity", raw) == nil
+		firstPass := schemaCheck(raw) == nil && s.validatePayload(r.Context(), a.Game, "activity", raw) == nil
 		if !firstPass {
 			attempts = 2
 			raw, _ = json.Marshal(v)
@@ -175,7 +175,7 @@ func (s *Service) plannerRoutes(m *http.ServeMux) {
 		if e = schemaCheck(raw); e != nil {
 			return nil, e
 		}
-		if e = s.validatePayload(r, a.Game, "activity", raw); e != nil {
+		if e = s.validatePayload(r.Context(), a.Game, "activity", raw); e != nil {
 			return nil, e
 		}
 		sim := simulate(v, []SimulationEvent{{Amount: min(v.Target, 100000), Time: time.Now().Unix()}})

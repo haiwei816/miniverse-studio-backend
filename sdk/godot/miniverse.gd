@@ -213,3 +213,24 @@ func sync_pending() -> Dictionary:
 			if data is Dictionary:
 				results[slot] = await cloud_save(slot, int(pending.revision), data, int(pending.schema_version))
 	return results
+
+func start_match(board := "", season := "", rule_version := "card-v1") -> Dictionary:
+	return await game_request("/matches/start", HTTPClient.METHOD_POST, {
+		"board": board,
+		"season": season,
+		"rule_version": rule_version,
+	})
+
+func validate_replay(version: String, seed: int, actions: Array, request_id := "", claimed_score = null, board := "", season := "", match_id := "") -> Dictionary:
+	var body := {
+		"version": version,
+		"seed": seed,
+		"actions": actions,
+		"request_id": request_id,
+		"board": board,
+		"season": season,
+		"match_id": match_id,
+	}
+	if claimed_score != null:
+		body["claimed_score"] = int(claimed_score)
+	return await game_request("/replays/validate", HTTPClient.METHOD_POST, body)

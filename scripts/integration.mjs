@@ -34,7 +34,7 @@ for (const [, base, path] of targets) {
 }
 for (const suite of [
   'e2e', 'mail-inventory', 'mail-inventory-upgrade', 'player-platform',
-  'companion', 'witch-cauldron', 'migrations', 'production-boundary', 'recovery',
+  'companion', 'witch-cauldron', 'ops-agent-mcp', 'domain-loops', 'migrations', 'production-boundary', 'recovery',
 ]) {
   console.log(`Running ${suite}`);
   execFileSync(process.execPath, [`tests/${suite}.mjs`], {stdio: 'inherit', timeout: 300000});

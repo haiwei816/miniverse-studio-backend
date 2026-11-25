@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc"
 	"io"
 	"log/slog"
+	"miniverse/backend/internal/httpserver"
+	"miniverse/backend/internal/telemetry"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -29,6 +31,15 @@ type Service struct {
 	CompanionChatURL      string
 	CompanionAPIKey       string
 	CompanionModel        string
+	OpsAgentProtocol      string
+	OpsAgentURL           string
+	OpsAgentAPIKey        string
+	OpsAgentModel         string
+	OpsAgentSecretKey     []byte
+	MetricsBearerToken    string
+	opsAgentMu            sync.RWMutex
+	PersistOpsEvents      bool
+	Telemetry             *telemetry.Recorder
 	mu                    sync.Mutex
 	limits                map[string]bucket
 	nextLimitSweep        time.Time
@@ -40,6 +51,11 @@ type Service struct {
 	companionLimits       map[string]bucket
 	nextCompanionSweep    time.Time
 	companionActive       chan struct{}
+	opsAgentActive        chan struct{}
+	ConcurrentDiagnostics bool
+	EnforceBans           bool
+	gameCacheMu           sync.RWMutex
+	gameCache             map[string]gameCacheEntry
 	ruleMu                sync.Mutex
 	ruleAddr              string
 	ruleConn              *grpc.ClientConn
@@ -55,6 +71,11 @@ func (s *Service) Close() error {
 	s.ruleConn = nil
 	s.ruleAddr = ""
 	return err
+}
+
+type gameCacheEntry struct {
+	active    bool
+	expiresAt time.Time
 }
 
 type bucket struct {
@@ -74,12 +95,59 @@ func New(db *sql.DB, sandbox bool) *Service {
 		Sandbox:               sandbox,
 		RuleCoreAddr:          "rulecore:50051",
 		SandboxPlatformSecret: "local-sandbox-not-a-platform-key",
+		Telemetry:             telemetry.New(),
 		limits:                map[string]bucket{},
 		authLimits:            map[string]bucket{},
 		authHashes:            make(chan struct{}, 4),
 		companionLimits:       map[string]bucket{},
 		companionActive:       make(chan struct{}, 16),
+		opsAgentActive:        make(chan struct{}, 8),
+		gameCache:             map[string]gameCacheEntry{},
 	}
+}
+
+// InvalidateGameCache evicts cached active state for a game (or all games when empty).
+func (s *Service) InvalidateGameCache(gameID string) {
+	s.gameCacheMu.Lock()
+	defer s.gameCacheMu.Unlock()
+	if s.gameCache == nil {
+		return
+	}
+	if gameID == "" {
+		clear(s.gameCache)
+		return
+	}
+	delete(s.gameCache, gameID)
+}
+
+func (s *Service) gameActive(ctx context.Context, gameID string) (bool, error) {
+	now := time.Now()
+	s.gameCacheMu.RLock()
+	entry, ok := s.gameCache[gameID]
+	s.gameCacheMu.RUnlock()
+	if ok && entry.expiresAt.After(now) {
+		return entry.active, nil
+	}
+	var active bool
+	err := s.DB.QueryRowContext(ctx, "SELECT active FROM games WHERE id=?", gameID).Scan(&active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if active {
+		s.gameCacheMu.Lock()
+		if s.gameCache == nil {
+			s.gameCache = map[string]gameCacheEntry{}
+		}
+		if len(s.gameCache) >= 1024 {
+			clear(s.gameCache)
+		}
+		s.gameCache[gameID] = gameCacheEntry{active: true, expiresAt: now.Add(5 * time.Second)}
+		s.gameCacheMu.Unlock()
+	}
+	return active, nil
 }
 func random() string {
 	b := make([]byte, 24)
@@ -104,20 +172,74 @@ func decode(r *http.Request, v any) error {
 
 type endpoint func(*http.Request) (any, error)
 
+type reqMetaKey struct{}
+
+type reqMeta struct {
+	gameID   string
+	playerID string
+	cookies  []*http.Cookie
+}
+
+func setResponseCookie(r *http.Request, c *http.Cookie) {
+	if r == nil || c == nil {
+		return
+	}
+	if meta, ok := r.Context().Value(reqMetaKey{}).(*reqMeta); ok && meta != nil {
+		meta.cookies = append(meta.cookies, c)
+	}
+}
+
+func requireCookieCSRF(r *http.Request) error {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return nil
+	}
+	if r.Header.Get("X-MiniVerse-CSRF") != "1" {
+		return bad(403, "csrf_rejected")
+	}
+	return nil
+}
+
+func writeResponseCookies(w http.ResponseWriter, r *http.Request) {
+	if r == nil {
+		return
+	}
+	if meta, ok := r.Context().Value(reqMetaKey{}).(*reqMeta); ok && meta != nil {
+		for _, c := range meta.cookies {
+			http.SetCookie(w, c)
+		}
+	}
+}
+
 func (s *Service) handle(m *http.ServeMux, path string, f endpoint) {
+	s.handleWithTimeout(m, path, 10*time.Second, f)
+}
+
+func (s *Service) handleWithTimeout(m *http.ServeMux, path string, timeout time.Duration, f endpoint) {
 	m.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+		meta := &reqMeta{gameID: r.PathValue("game")}
+		ctx = context.WithValue(ctx, reqMetaKey{}, meta)
 		r = r.WithContext(ctx)
 		host := clientIP(r, s.TrustedProxies)
 		w.Header().Set("Content-Type", "application/json")
 		if !s.allowRequest(host, time.Now()) {
+			elapsed := time.Since(start)
+			if s.Telemetry != nil {
+				s.Telemetry.RecordRateLimit()
+				s.Telemetry.RecordRequest(path, r.Method, 429, elapsed)
+			}
+			s.recordOpsEvent(r, "rate_limit", 429, "rate_limited", elapsed, meta.playerID, nil)
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(429)
 			json.NewEncoder(w).Encode(map[string]string{"error": "rate_limited"})
 			return
 		}
 		v, e := f(r)
+		elapsed := time.Since(start)
+		writeResponseCookies(w, r)
 		if e != nil {
 			status, code := 500, "internal_error"
 			var p Problem
@@ -126,25 +248,84 @@ func (s *Service) handle(m *http.ServeMux, path string, f endpoint) {
 			} else {
 				// Do not log raw driver errors: they can contain SQL values or credentials.
 				attrs := []any{"path", r.URL.Path, "error_type", fmt.Sprintf("%T", e)}
+				if reqID := httpserver.RequestID(r.Context()); reqID != "" {
+					attrs = append(attrs, "request_id", reqID)
+				}
 				var mysqlErr *mysql.MySQLError
 				if errors.As(e, &mysqlErr) {
 					attrs = append(attrs, "mysql_code", mysqlErr.Number)
 				}
 				slog.Error("request_failed", attrs...)
 			}
+			if s.Telemetry != nil {
+				s.Telemetry.RecordRequest(path, r.Method, status, elapsed)
+				if code == "auth_rate_limited" {
+					s.Telemetry.RecordAuthRateLimit()
+				}
+			}
+			if status == 409 || status == 422 || status == 429 || status >= 500 {
+				s.recordOpsEvent(r, classifyOpsCategory(status, code), status, code, elapsed, meta.playerID, nil)
+			}
 			s.recordFailure(r, code)
 			w.WriteHeader(status)
 			json.NewEncoder(w).Encode(map[string]string{"error": code})
 			return
 		}
+		if s.Telemetry != nil {
+			s.Telemetry.RecordRequest(path, r.Method, 200, elapsed)
+		}
 		json.NewEncoder(w).Encode(v)
 	})
 }
-func (s *Service) actor(r *http.Request) (string, error) {
-	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+func (s *Service) playerToken(r *http.Request) (string, error) {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer "), nil
+	}
+	c, err := r.Cookie("mv_player_session")
+	if err != nil || strings.TrimSpace(c.Value) == "" {
 		return "", bad(401, "unauthorized")
 	}
-	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if err := requireCookieCSRF(r); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(c.Value), nil
+}
+
+type rowQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Service) checkPlayerBan(ctx context.Context, game, player string) error {
+	return s.checkPlayerBanWith(ctx, s.DB, game, player)
+}
+
+func (s *Service) checkPlayerBanWith(ctx context.Context, q rowQuerier, game, player string) error {
+	if !s.EnforceBans || player == "" {
+		return nil
+	}
+	now := time.Now().Unix()
+	var n int
+	var err error
+	if game != "" {
+		err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM player_bans WHERE player_id=? AND (game_id='' OR game_id=?) AND (expires_at IS NULL OR expires_at>?)", player, game, now).Scan(&n)
+	} else {
+		err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM player_bans WHERE player_id=? AND (expires_at IS NULL OR expires_at>?)", player, now).Scan(&n)
+	}
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return bad(403, "account_suspended")
+	}
+	return nil
+}
+
+func (s *Service) actor(r *http.Request) (string, error) {
+	t, err := s.playerToken(r)
+	if err != nil {
+		return "", err
+	}
 	var id string
 	e := s.DB.QueryRowContext(r.Context(), "SELECT player_id FROM sessions WHERE token_hash=? AND expires_at>?", s.sessionHash(t), time.Now().Unix()).Scan(&id)
 	if errors.Is(e, sql.ErrNoRows) {
@@ -153,13 +334,20 @@ func (s *Service) actor(r *http.Request) (string, error) {
 	if e != nil {
 		return "", e
 	}
+	if e = s.checkPlayerBan(r.Context(), "", id); e != nil {
+		return "", e
+	}
+	if meta, ok := r.Context().Value(reqMetaKey{}).(*reqMeta); ok && meta != nil {
+		meta.playerID = id
+	}
 	return id, nil
 }
 func (s *Service) scope(r *http.Request) (string, string, error) {
 	g := r.PathValue("game")
 	var id string
 	var e error
-	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer g_") {
+	isGameToken := strings.HasPrefix(r.Header.Get("Authorization"), "Bearer g_")
+	if isGameToken {
 		id, e = s.gameActor(r, g)
 	} else {
 		id, e = s.actor(r)
@@ -167,13 +355,21 @@ func (s *Service) scope(r *http.Request) (string, string, error) {
 	if e != nil {
 		return "", "", e
 	}
-	var active bool
-	e = s.DB.QueryRowContext(r.Context(), "SELECT active FROM games WHERE id=?", g).Scan(&active)
-	if errors.Is(e, sql.ErrNoRows) || (e == nil && !active) {
-		return "", "", bad(404, "game_not_found")
+	if isGameToken {
+		if e = s.checkPlayerBan(r.Context(), g, id); e != nil {
+			return "", "", e
+		}
 	}
+	active, e := s.gameActive(r.Context(), g)
 	if e != nil {
 		return "", "", e
+	}
+	if !active {
+		return "", "", bad(404, "game_not_found")
+	}
+	if meta, ok := r.Context().Value(reqMetaKey{}).(*reqMeta); ok && meta != nil {
+		meta.gameID = g
+		meta.playerID = id
 	}
 	return g, id, nil
 }
@@ -194,6 +390,9 @@ func (s *Service) Routes(m *http.ServeMux) {
 	s.diagnosticRoutes(m)
 	s.companionRoutes(m)
 	s.playerPlatformRoutes(m)
+	s.opsObservabilityRoutes(m)
+	s.mcpRoutes(m)
+	s.opsAgentRoutes(m)
 }
 func (s *Service) transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	for attempt := 0; attempt < 10; attempt++ {
@@ -201,6 +400,9 @@ func (s *Service) transaction(ctx context.Context, fn func(*sql.Tx) error) error
 		var me *mysql.MySQLError
 		if !errors.As(err, &me) || (me.Number != 1213 && me.Number != 1205) {
 			return err
+		}
+		if s.Telemetry != nil {
+			s.Telemetry.RecordDeadlockRetry()
 		}
 		select {
 		case <-ctx.Done():

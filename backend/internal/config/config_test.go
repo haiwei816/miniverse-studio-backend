@@ -96,6 +96,67 @@ func TestLoadExtendedDefaultsAndCompanionValidation(t *testing.T) {
 			},
 			ok: false,
 		},
+		{
+			name: "ops agent https with model",
+			env: map[string]string{
+				"APP_ENV":       "production",
+				"OPS_AGENT_URL": "https://api.example.com/v1/chat/completions",
+				"OPS_AGENT_MODEL": "gpt-4o",
+			},
+			ok: true,
+		},
+		{
+			name: "ops agent missing model rejected",
+			env: map[string]string{
+				"APP_ENV":       "sandbox",
+				"OPS_AGENT_URL": "http://127.0.0.1:11434/v1/chat/completions",
+			},
+			ok: false,
+		},
+		{
+			name: "ops agent prod http rejected",
+			env: map[string]string{
+				"APP_ENV":         "production",
+				"OPS_AGENT_URL":   "http://127.0.0.1:11434/v1/chat/completions",
+				"OPS_AGENT_MODEL": "qwen",
+			},
+			ok: false,
+		},
+		{
+			name: "ops agent secret hex 32 bytes",
+			env: map[string]string{
+				"OPS_AGENT_SECRET_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			},
+			ok: true,
+		},
+		{
+			name: "ops agent secret base64 32 bytes",
+			env: map[string]string{
+				"OPS_AGENT_SECRET_KEY": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+			},
+			ok: true,
+		},
+		{
+			name: "ops agent secret invalid length rejected",
+			env: map[string]string{
+				"OPS_AGENT_SECRET_KEY": "too-short",
+			},
+			ok: false,
+		},
+		{
+			name: "metrics bearer token valid",
+			env: map[string]string{
+				"METRICS_BEARER_TOKEN": "prom-scrape-secret-1234",
+			},
+			ok: true,
+		},
+		{
+			name: "metrics bearer token too short rejected",
+			env: map[string]string{
+				"METRICS_BEARER_TOKEN": "short",
+			},
+			ok: false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := load(func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok })

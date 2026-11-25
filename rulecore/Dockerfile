@@ -5,7 +5,13 @@ WORKDIR /src
 COPY proto ./proto
 COPY rulecore ./rulecore
 RUN cmake -S rulecore -B /build -DCMAKE_BUILD_TYPE=Release && cmake --build /build -j4 && ctest --test-dir /build --output-on-failure
-FROM build AS runtime
+RUN mkdir -p /runtime-libs && ldd /build/rulecore /build/rule_tests | awk '/=> \// {print $3}' | grep -Ev '/(libc|libm|libpthread|libdl|librt|ld-linux)\.so' | sort -u | xargs -I{} cp -L {} /runtime-libs/
+
+FROM debian:trixie-slim AS runtime
+COPY --from=build /runtime-libs/ /usr/local/lib/rulecore/
+COPY --from=build /build/rulecore /build/rulecore
+COPY --from=build /build/rule_tests /build/rule_tests
+RUN echo "/usr/local/lib/rulecore" > /etc/ld.so.conf.d/rulecore.conf && ldconfig && /build/rule_tests
 EXPOSE 50051
 USER nobody
 ENTRYPOINT ["/build/rulecore"]

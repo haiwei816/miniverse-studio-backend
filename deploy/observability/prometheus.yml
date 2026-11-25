@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: miniverse-api
+    metrics_path: /gm/system/metrics
+    authorization:
+      type: Bearer
+      credentials: sandbox-metrics-scrape-token
+    static_configs:
+      - targets: ["api:8080"]

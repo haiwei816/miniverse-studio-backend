@@ -45,10 +45,11 @@ jobs:
           mkdir -p ../work/backend-linux-amd64
           go build -trimpath -o ../work/backend-linux-amd64/api ./cmd/api
           go build -trimpath -o ../work/backend-linux-amd64/migrate ./cmd/migrate
+          go build -trimpath -o ../work/backend-linux-amd64/mcp ./cmd/mcp
           cp -r migrations ../work/backend-linux-amd64/
           printf '%s\n' "$GITHUB_SHA" > ../work/backend-linux-amd64/COMMIT
           cd ../work/backend-linux-amd64
-          sha256sum api migrate migrations/*.sql COMMIT > SHA256SUMS
+          sha256sum api migrate mcp migrations/*.sql COMMIT > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: backend-linux-amd64-${{ github.sha }}
@@ -77,11 +78,11 @@ jobs:
           cache-dependency-path: ${{ matrix.app }}/web/package-lock.json
       - run: npm ci
       - run: npm audit --audit-level=high
-      - name: Test player session and bridge boundaries
+      - name: Run frontend unit tests
+        run: npm test
+      - name: Test package script
         if: matrix.app == 'player'
-        run: |
-          npm test
-          node --test ../../scripts/package-images.test.mjs
+        run: node --test ../../scripts/package-images.test.mjs
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
@@ -100,6 +101,9 @@ jobs:
       COMPANION_CHAT_URL: ''
       COMPANION_API_KEY: ''
       COMPANION_MODEL: ''
+      OPS_AGENT_URL: ''
+      OPS_AGENT_API_KEY: ''
+      OPS_AGENT_MODEL: ''
     steps:
       - uses: actions/checkout@v4
         with:

@@ -1,0 +1,9 @@
+CREATE TABLE ops_agent_config (
+  id TINYINT PRIMARY KEY,
+  protocol VARCHAR(32) NOT NULL DEFAULT '',
+  url VARCHAR(512) NOT NULL DEFAULT '',
+  model VARCHAR(128) NOT NULL DEFAULT '',
+  api_key TEXT NOT NULL,
+  updated_by VARCHAR(64) NOT NULL DEFAULT '',
+  updated_at BIGINT NOT NULL DEFAULT 0
+);

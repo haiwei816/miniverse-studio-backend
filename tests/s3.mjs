@@ -1,13 +1,49 @@
-import assert from'node:assert/strict';import{api,login,base}from'./client.mjs';import{createHash}from'node:crypto';import{gzipSync}from'node:zlib';
-const a=await login(),b=await login(),t=a.access_token,p='/v1/games/sky-island/saves/main';
-const body=(n,data='{"level":1}')=>({revision:n,schema_version:1,data,checksum:createHash('sha256').update(data).digest('hex')});
-await api(p,'GET',undefined,t,404);await api(p,'PUT',body(0),t);
-const replies=await Promise.all(Array.from({length:8},()=>fetch(base+p,{method:'PUT',headers:{Authorization:'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify(body(1,'{"level":2}'))})));
-assert.equal(replies.filter(r=>r.status===200).length,1);assert.equal(replies.filter(r=>r.status===409).length,7);
-await api(p,'GET',undefined,b.access_token,404);await api(p,'PUT',{...body(2),checksum:'wrong'},t,400);
-const raw='{"level":3}';await api(p,'PUT',{...body(2,raw),encoding:'gzip',data:gzipSync(raw).toString('base64')},t);
-assert.equal((await api(p,'GET',undefined,t)).data,raw);
-await api(p,'DELETE',{revision:3},t);assert.equal((await api(p,'GET',undefined,t)).deleted,true);
-await api(p,'PUT',{revision:4,restore_revision:1},t);assert.equal((await api(p,'GET',undefined,t)).data,'{"level":1}');
-await api(p,'PUT',body(0),t,409);assert.equal((await api(p+'/history','GET',undefined,t)).length,5);
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import { api, base, login } from './client.mjs';
+
+const a = await login();
+const b = await login();
+const t = a.access_token;
+const p = '/v1/games/sky-island/saves/main';
+
+const body = (n, data = '{"level":1}') => ({
+  revision: n,
+  schema_version: 1,
+  data,
+  checksum: createHash('sha256').update(data).digest('hex'),
+});
+
+await api(p, 'GET', undefined, t, 404);
+await api(p, 'PUT', body(0), t);
+
+const replies = await Promise.all(
+  Array.from({ length: 8 }, () =>
+    fetch(base + p, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body(1, '{"level":2}')),
+    })
+  )
+);
+assert.equal(replies.filter((r) => r.status === 200).length, 1);
+assert.equal(replies.filter((r) => r.status === 409).length, 7);
+
+await api(p, 'GET', undefined, b.access_token, 404);
+await api(p, 'PUT', { ...body(2), checksum: 'wrong' }, t, 400);
+
+const raw = '{"level":3}';
+await api(p, 'PUT', { ...body(2, raw), encoding: 'gzip', data: gzipSync(raw).toString('base64') }, t);
+assert.equal((await api(p, 'GET', undefined, t)).data, raw);
+
+await api(p, 'DELETE', { revision: 3 }, t);
+assert.equal((await api(p, 'GET', undefined, t)).deleted, true);
+
+await api(p, 'PUT', { revision: 4, restore_revision: 1 }, t);
+assert.equal((await api(p, 'GET', undefined, t)).data, '{"level":1}');
+
+await api(p, 'PUT', body(0), t, 409);
+assert.equal((await api(p + '/history', 'GET', undefined, t)).length, 5);
+
 console.log('S3 concurrent optimistic locking, ownership, gzip/checksum, tombstone and restore: PASS');

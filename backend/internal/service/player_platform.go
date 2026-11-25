@@ -149,10 +149,16 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 				if subtle.ConstantTimeCompare([]byte(encoded), []byte(expected)) != 1 {
 					return nil, bad(401, "invalid_credentials")
 				}
+				if e := s.checkPlayerBan(r.Context(), "", id); e != nil {
+					return nil, e
+				}
 			}
 			token := random()
 			expiry := time.Now().Add(24 * time.Hour).Unix()
 			_, e := s.DB.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,player_id,expires_at) VALUES(?,?,?)", s.sessionHash(token), id, expiry)
+			if e == nil {
+				setResponseCookie(r, playerSessionCookie(token, 86400, s.Sandbox))
+			}
 			return map[string]any{"player_id": id, "username": b.Username, "access_token": token, "expires_at": expiry}, e
 		})
 	}
@@ -174,7 +180,14 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
-		e = s.logoutPlatformSession(r.Context(), p, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		tok, e := s.playerToken(r)
+		if e != nil {
+			return nil, e
+		}
+		e = s.logoutPlatformSession(r.Context(), p, tok)
+		if e == nil {
+			setResponseCookie(r, playerSessionCookie("", -1, s.Sandbox))
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /v1/platform/games", func(r *http.Request) (any, error) {
@@ -277,6 +290,9 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
+		if e = s.checkPlayerBan(r.Context(), g.GameID, p); e != nil {
+			return nil, e
+		}
 		var b struct {
 			Challenge string `json:"code_challenge"`
 		}
@@ -288,7 +304,11 @@ func (s *Service) playerPlatformRoutes(m *http.ServeMux) {
 		}
 		code := random()
 		expiry := time.Now().Add(time.Minute).Unix()
-		parentHash := s.sessionHash(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		parentToken, e := s.playerToken(r)
+		if e != nil {
+			return nil, e
+		}
+		parentHash := s.sessionHash(parentToken)
 		var epoch int64
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
 			// Serialize with logout before taking the context lock. An earlier
@@ -556,6 +576,9 @@ func (s *Service) developerListingRoutes(m *http.ServeMux) {
 				}
 				return audit(r, tx, a, "listing_"+action, "游戏目录发布管理", map[string]string{"action": action})
 			})
+			if e == nil && (action == "publish" || action == "unpublish") {
+				s.InvalidateGameCache(a.Game)
+			}
 			return map[string]bool{"ok": true}, e
 		})
 	}

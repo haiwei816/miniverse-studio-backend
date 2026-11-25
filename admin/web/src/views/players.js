@@ -29,6 +29,9 @@ export const PlayersView = defineComponent({
     const detailRow = ref(null);
     const tab = ref("inventory");
     const drawerOpen = ref(false);
+    const banReason = ref("");
+    const banHours = ref("");
+    const banBusy = ref(false);
     let listGen = 0;
     let detailGen = 0;
     let listAbort = null;
@@ -154,10 +157,43 @@ export const PlayersView = defineComponent({
     const empty = computed(() => !loading.value && !error.value && rows.value.length === 0);
     const detailTitle = computed(() => (detail.value ? detail.value.name || detail.value.player_id : detailRow.value ? detailRow.value.name || detailRow.value.player_id : "玩家详情"));
     const canAward = computed(() => props.role !== "support" && props.role !== "reviewer");
+    const canBan = computed(() => props.role === "admin" || props.role === "reviewer");
+
+    async function toggleBan(banned) {
+      const targetGame = props.game;
+      const uid = detail.value && detail.value.player_id;
+      if (!targetGame || !uid || banBusy.value || !canBan.value) return;
+      if (banReason.value.trim().length < 3) {
+        notify("请填写封禁/解封原因（至少 3 个字符）", "error");
+        return;
+      }
+      banBusy.value = true;
+      try {
+        const body = { reason: banReason.value.trim() };
+        if (!banned) {
+          const hrs = Number(banHours.value);
+          if (hrs > 0) body.expires_at = Math.floor(Date.now() / 1000) + Math.round(hrs * 3600);
+        }
+        await request(`/gm/games/${encodeURIComponent(targetGame)}/players/${encodeURIComponent(uid)}/${banned ? "unban" : "ban"}`, {
+          method: "POST",
+          body,
+        });
+        if (targetGame !== props.game) return;
+        banReason.value = "";
+        banHours.value = "";
+        notify(banned ? "已解除玩家封禁" : "已封禁玩家并踢出在线会话", "success");
+        await inspect(detailRow.value || { player_id: uid, name: detail.value.name });
+      } catch (e) {
+        if (targetGame === props.game) notify(errorText(e.code), "error");
+      } finally {
+        banBusy.value = false;
+      }
+    }
 
     return {
       query, rows, loading, error, detail, detailLoading, detailError, detailRow, drawerOpen, tab, TABS,
-      load, inspect, awardCurrent, empty, detailTitle, canAward, count, stamp, relative,
+      banReason, banHours, banBusy,
+      load, inspect, awardCurrent, toggleBan, empty, detailTitle, canAward, canBan, count, stamp, relative,
     };
   },
   template: `
@@ -194,9 +230,25 @@ export const PlayersView = defineComponent({
       <error-box v-else-if="detailError" :text="detailError" @retry="detailRow && inspect(detailRow)" />
       <div v-else-if="detail">
         <div class="toolbar" style="margin-bottom:12px;justify-content:space-between">
-          <span class="pill" data-tone="info">{{ gameName || game }}</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="pill" data-tone="info">{{ gameName || game }}</span>
+            <span class="pill" :data-tone="detail.ban ? 'danger' : 'ok'">{{ detail.ban ? '已封禁' : '状态正常' }}</span>
+          </div>
           <button v-if="canAward" type="button" class="btn btn-soft btn-sm" @click="awardCurrent">
             <icon name="operations" :size="13" />为此玩家补发
+          </button>
+        </div>
+
+        <div v-if="detail.ban" class="banner" data-tone="warn" style="margin-bottom:12px">
+          <icon name="alert" :size="14" />
+          <span>封禁原因：{{ detail.ban.reason }} · 操作人 {{ detail.ban.banned_by }} · {{ detail.ban.expires_at ? '到期 ' + stamp(detail.ban.expires_at) : '永久封禁' }}</span>
+        </div>
+
+        <div v-if="canBan" class="toolbar" style="margin-bottom:12px;gap:8px;flex-wrap:wrap">
+          <input class="input" style="flex:1;min-width:160px" v-model="banReason" placeholder="封禁 / 解封原因（至少 3 个字符）" />
+          <input v-if="!detail.ban" class="input" style="width:110px" type="number" min="1" v-model="banHours" placeholder="时长(小时)" />
+          <button type="button" :class="detail.ban ? 'btn btn-soft btn-sm' : 'btn btn-danger btn-sm'" :disabled="banBusy" @click="toggleBan(!!detail.ban)">
+            {{ banBusy ? '处理中…' : detail.ban ? '解除封禁' : '封禁并踢下线' }}
           </button>
         </div>
 
