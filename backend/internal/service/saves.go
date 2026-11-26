@@ -8,6 +8,22 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
+)
+
+const maxPooledBufferCap = 64 * 1024
+
+var (
+	gzipWriterPool = sync.Pool{
+		New: func() any {
+			return gzip.NewWriter(io.Discard)
+		},
+	}
+	saveBufPool = sync.Pool{
+		New: func() any {
+			return bytes.NewBuffer(make([]byte, 0, 4096))
+		},
+	}
 )
 
 type Save struct {
@@ -24,18 +40,42 @@ func unpack(body []byte) (string, error) {
 		return "", e
 	}
 	defer z.Close()
-	b, e := io.ReadAll(io.LimitReader(z, (1<<20)+1))
-	if len(b) > 1<<20 {
+	buf := saveBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		// Prevent oversized buffers (up to 1 MiB) from staying pinned in sync.Pool forever.
+		if buf.Cap() <= maxPooledBufferCap {
+			buf.Reset()
+			saveBufPool.Put(buf)
+		}
+	}()
+	_, e = io.Copy(buf, io.LimitReader(z, (1<<20)+1))
+	if buf.Len() > 1<<20 {
 		return "", bad(413, "save_too_large")
 	}
-	return string(b), e
+	if e != nil {
+		return "", e
+	}
+	return buf.String(), nil
 }
+
 func pack(data string) []byte {
-	var b bytes.Buffer
-	z := gzip.NewWriter(&b)
-	z.Write([]byte(data))
-	z.Close()
-	return b.Bytes()
+	buf := saveBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	zw := gzipWriterPool.Get().(*gzip.Writer)
+	zw.Reset(buf)
+	_, _ = zw.Write([]byte(data))
+	_ = zw.Close()
+	zw.Reset(io.Discard)
+	gzipWriterPool.Put(zw)
+
+	out := make([]byte, buf.Len())
+	copy(out, buf.Bytes())
+	if buf.Cap() <= maxPooledBufferCap {
+		buf.Reset()
+		saveBufPool.Put(buf)
+	}
+	return out
 }
 func (s *Service) savesRoutes(m *http.ServeMux) {
 	base := "/v1/games/{game}/saves/{slot}"

@@ -1,4 +1,5 @@
 FROM golang:1.27.3 AS build
+ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
 WORKDIR /src
 COPY backend/ .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go mod download && CGO_ENABLED=0 go build -o /api ./cmd/api && CGO_ENABLED=0 go build -o /migrate ./cmd/migrate && CGO_ENABLED=0 go build -o /mcp ./cmd/mcp

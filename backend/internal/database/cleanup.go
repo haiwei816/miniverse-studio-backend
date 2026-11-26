@@ -8,12 +8,15 @@ import (
 )
 
 const (
-	cleanupInterval  = 5 * time.Minute
-	cleanupGrace     = time.Hour
-	opsEventsMaxAge  = 7 * 24 * time.Hour
-	opsAgentMaxAge   = 30 * 24 * time.Hour
-	saveHistoryKeep  = 50
-	cleanupBatch     = 1000
+	cleanupInterval      = 5 * time.Minute
+	cleanupGrace         = time.Hour
+	opsEventsMaxAge      = 7 * 24 * time.Hour
+	opsAgentMaxAge       = 30 * 24 * time.Hour
+	outboxDispatchedAge  = 7 * 24 * time.Hour
+	mqConsumedMaxAge     = 14 * 24 * time.Hour
+	aiGatewayAuditMaxAge = 30 * 24 * time.Hour
+	saveHistoryKeep      = 50
+	cleanupBatch         = 1000
 )
 
 type cleanupExecutor interface {
@@ -105,6 +108,47 @@ func cleanupSaveHistory(ctx context.Context, db cleanupExecutor) {
 	}
 }
 
+// cleanupDistributedAndAIAudits removes dispatched outbox rows, old consumer dedupe keys, and AI gateway audits in bounded batches.
+func cleanupDistributedAndAIAudits(ctx context.Context, db cleanupExecutor, now time.Time) {
+	type cleanupTarget struct {
+		name  string
+		query string
+		args  []any
+	}
+	targets := []cleanupTarget{
+		{
+			name:  "outbox_events",
+			query: "DELETE FROM outbox_events WHERE status='dispatched' AND created_at < ? ORDER BY created_at LIMIT ?",
+			args:  []any{now.Add(-outboxDispatchedAge).Unix(), cleanupBatch},
+		},
+		{
+			name:  "mq_consumed_events",
+			query: "DELETE FROM mq_consumed_events WHERE consumed_at < ? ORDER BY consumed_at LIMIT ?",
+			args:  []any{now.Add(-mqConsumedMaxAge).Unix(), cleanupBatch},
+		},
+		{
+			name:  "ai_gateway_audits",
+			query: "DELETE FROM ai_gateway_audits WHERE created_at < ? ORDER BY created_at LIMIT ?",
+			args:  []any{now.Add(-aiGatewayAuditMaxAge).Unix(), cleanupBatch},
+		},
+	}
+	for _, tgt := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		result, err := db.ExecContext(queryCtx, tgt.query, tgt.args...)
+		cancel()
+		if err != nil {
+			slog.Error("distributed_cleanup_failed", "table", tgt.name, "error", err)
+			continue
+		}
+		if count, err := result.RowsAffected(); err == nil && count > 0 {
+			slog.Info("distributed_cleanup", "table", tgt.name, "deleted", count)
+		}
+	}
+}
+
 // StartCleanup runs bounded maintenance until its returned stop function is
 // called. The caller must stop it before closing the database.
 func StartCleanup(ctx context.Context, db *sql.DB) func() {
@@ -117,6 +161,7 @@ func StartCleanup(ctx context.Context, db *sql.DB) func() {
 		cleanupOpsEvents(ctx, db, now)
 		cleanupOpsAgentHistory(ctx, db, now)
 		cleanupSaveHistory(ctx, db)
+		cleanupDistributedAndAIAudits(ctx, db, now)
 		ticker := time.NewTicker(cleanupInterval)
 		defer ticker.Stop()
 		for {
@@ -128,6 +173,7 @@ func StartCleanup(ctx context.Context, db *sql.DB) func() {
 				cleanupOpsEvents(ctx, db, now)
 				cleanupOpsAgentHistory(ctx, db, now)
 				cleanupSaveHistory(ctx, db)
+				cleanupDistributedAndAIAudits(ctx, db, now)
 			}
 		}
 	}()

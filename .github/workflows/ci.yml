@@ -38,6 +38,8 @@ jobs:
         run: |
           go test -race -count=1 ./...
           go vet ./...
+          go build ./cmd/bench ./cmd/eval
+          go run ./cmd/eval
       - name: Build Linux API and migrations
         env:
           CGO_ENABLED: '0'

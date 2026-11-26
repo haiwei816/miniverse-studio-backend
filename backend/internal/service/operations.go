@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"miniverse/backend/internal/mq"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,13 @@ type RewardRequest struct {
 	Players []string `json:"players"`
 	Item    string   `json:"item"`
 	Amount  int64    `json:"amount"`
+}
+
+type RewardBatchRequest struct {
+	Players      []string `json:"players"`
+	BroadcastAll bool     `json:"broadcast_all"`
+	Item         string   `json:"item"`
+	Amount       int64    `json:"amount"`
 }
 
 type ActivityStopRequest struct {
@@ -81,6 +89,21 @@ func (s *Service) validatePayload(ctx context.Context, g, kind string, raw json.
 		}
 		if n != len(unique) {
 			return bad(400, "unknown_player")
+		}
+	case "reward_batch":
+		var b RewardBatchRequest
+		if e := json.Unmarshal(raw, &b); e != nil || b.Amount < 1 || b.Amount > 1000000 {
+			return bad(400, "invalid_reward_request")
+		}
+		if !b.BroadcastAll && (len(b.Players) < 1 || len(b.Players) > 50000) {
+			return bad(400, "invalid_reward_request")
+		}
+		var n int
+		if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM items WHERE game_id=? AND id=?", g, b.Item).Scan(&n); e != nil {
+			return e
+		}
+		if n != 1 {
+			return bad(400, "unknown_item")
 		}
 	case "activity":
 		a, e := readActivity(raw)
@@ -258,6 +281,8 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 			if e = decode(r, &b); e != nil {
 				return nil, e
 			}
+			var approvedKind string
+			var approvedRaw []byte
 			e = s.transaction(r.Context(), func(tx *sql.Tx) error {
 				var creator, state, kind string
 				var raw []byte
@@ -265,6 +290,8 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 				if e := tx.QueryRowContext(r.Context(), "SELECT creator,state,kind,payload FROM gm_requests WHERE game_id=? AND id=? FOR UPDATE", a.Game, id).Scan(&creator, &state, &kind, &raw); e != nil {
 					return bad(404, "request_not_found")
 				}
+				approvedKind = kind
+				approvedRaw = raw
 				if action == "approve" && creator == a.ID {
 					return bad(403, "self_approval_forbidden")
 				}
@@ -351,6 +378,31 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 						if e := s.applyPlayerBanTx(r.Context(), tx, a, v.PlayerID, v.Reason, v.ExpiresAt); e != nil {
 							return e
 						}
+					case "reward_batch":
+						var v RewardBatchRequest
+						if e := json.Unmarshal(raw, &v); e != nil {
+							return e
+						}
+						jobID := "job-" + random()[:16]
+						now := time.Now().Unix()
+						if _, e := tx.ExecContext(r.Context(),
+							"INSERT INTO batch_grant_jobs(id,game_id,request_id,item,amount,reason,total_players,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
+							jobID, a.Game, id, v.Item, v.Amount, b.Reason, len(v.Players), now, now,
+						); e != nil {
+							return e
+						}
+						if e := mq.EnqueueTx(r.Context(), tx, "outbox-"+jobID, mq.TopicRewardBatch, a.Game, rewardBatchPayload{
+							JobID:        jobID,
+							GameID:       a.Game,
+							RequestID:    id,
+							Item:         v.Item,
+							Amount:       v.Amount,
+							Reason:       b.Reason,
+							Players:      v.Players,
+							BroadcastAll: v.BroadcastAll,
+						}); e != nil {
+							return e
+						}
 					}
 				}
 				if _, e := tx.ExecContext(r.Context(), "UPDATE gm_requests SET state=?,reviewer=? WHERE game_id=? AND id=?", next, a.ID, a.Game, id); e != nil {
@@ -358,6 +410,31 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 				}
 				return audit(r, tx, a, "request_"+action, b.Reason, map[string]string{"request_id": id, "kind": kind})
 			})
+			if e == nil && action == "approve" {
+				switch approvedKind {
+				case "activity", "activity_stop":
+					s.InvalidateActivitiesCache(a.Game)
+				case "board_upsert":
+					var v BoardUpsertRequest
+					if json.Unmarshal(approvedRaw, &v) == nil {
+						s.invalidateBoardRedis(r.Context(), a.Game, v.ID, v.Season)
+					}
+				case "season_settle":
+					var v SeasonSettleRequest
+					if json.Unmarshal(approvedRaw, &v) == nil {
+						s.invalidateBoardRedis(r.Context(), a.Game, v.Board, v.Season)
+					}
+				case "player_ban":
+					var v PlayerBanRequest
+					if json.Unmarshal(approvedRaw, &v) == nil {
+						s.InvalidateBanCache(v.PlayerID)
+					}
+				case "reward_batch":
+					if s.OutboxRelay != nil {
+						s.OutboxRelay.Wake()
+					}
+				}
+			}
 			return map[string]bool{"ok": true}, e
 		})
 	}
@@ -383,6 +460,9 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 			}
 			return audit(r, tx, a, "activity_stopped", b.Reason, map[string]string{"activity_id": r.PathValue("activity")})
 		})
+		if e == nil {
+			s.InvalidateActivitiesCache(a.Game)
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET "+base+"/activities/{activity}/versions", func(r *http.Request) (any, error) {
@@ -448,5 +528,19 @@ func (s *Service) operationsRoutes(m *http.ServeMux) {
 			out = append(out, map[string]string{"id": id, "body": body})
 		}
 		return out, rows.Err()
+	})
+	s.handle(m, "GET "+base+"/batch-jobs", func(r *http.Request) (any, error) {
+		a, e := s.gm(r, "read")
+		if e != nil {
+			return nil, e
+		}
+		jobs, e := s.queryRowsGeneric(r.Context(),
+			"SELECT id,request_id,item,amount,reason,total_players,succeeded_players,failed_players,state,last_error,created_at,updated_at FROM batch_grant_jobs WHERE game_id=? ORDER BY created_at DESC,id DESC LIMIT 50",
+			a.Game,
+		)
+		if e != nil {
+			return nil, e
+		}
+		return map[string]any{"jobs": jobs}, nil
 	})
 }

@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"miniverse/backend/internal/aigateway"
+	"miniverse/backend/internal/httpserver"
 	"miniverse/backend/internal/mcp"
 	"miniverse/backend/internal/opsagent"
 	"net/http"
@@ -200,6 +202,84 @@ func (s *Service) persistOpsAgentConfigWithAudit(r *http.Request, gm GM, proto, 
 			"key_persisted": keyPersisted,
 		})
 	})
+}
+
+// RecordAIGatewayAudit implements aigateway.AuditSink, updating telemetry and persisting gateway decisions.
+func (s *Service) RecordAIGatewayAudit(ctx context.Context, rec aigateway.AuditRecord) {
+	if s.Telemetry != nil && (rec.Decision == "block" || rec.Decision == "downgrade") {
+		s.Telemetry.RecordAIGatewayBlocked()
+	}
+	if !s.PersistOpsEvents || s.DB == nil {
+		return
+	}
+	detailRaw := []byte("{}")
+	if rec.Detail != nil {
+		if b, err := json.Marshal(rec.Detail); err == nil {
+			detailRaw = b
+		}
+	}
+	wCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, _ = s.DB.ExecContext(wCtx,
+		"INSERT INTO ai_gateway_audits(trace_id,source,game_id,actor_id,hook_stage,decision,reason_code,pii_redacted_count,detail,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+		rec.TraceID, rec.Source, rec.GameID, rec.ActorID, rec.HookStage, rec.Decision, rec.ReasonCode, rec.PIIRedactedCount, detailRaw, rec.CreatedAt,
+	)
+}
+
+func (s *Service) persistOpsAgentRun(ctx context.Context, r *http.Request, a GM, question string, res opsagent.RunResult) (string, int64, error) {
+	runID := "run-" + random()[:20]
+	now := time.Now().Unix()
+	e := s.transaction(ctx, func(tx *sql.Tx) error {
+		if _, e := tx.ExecContext(ctx,
+			"INSERT INTO ops_agent_runs(id,game_id,admin_id,question,mode,model,status,summary,root_cause,recommendation,proposal_request_id,steps_count,prompt_tokens,completion_tokens,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			runID, a.Game, a.ID, question, res.Mode, res.Model, res.Status, res.Summary, res.RootCause, res.Recommendation, res.ProposalRequestID, len(res.Steps), res.PromptTokens, res.CompletionTokens, res.DurationMS, now,
+		); e != nil {
+			return e
+		}
+		for _, st := range res.Steps {
+			if _, e := tx.ExecContext(ctx,
+				"INSERT INTO ops_agent_steps(run_id,step_index,tool_name,arguments_json,result_summary,is_error,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?)",
+				runID, st.StepIndex, st.ToolName, st.ArgumentsJSON, st.ResultSummary, st.IsError, st.DurationMS, now,
+			); e != nil {
+				return e
+			}
+		}
+		reason, _ := sanitizeAIReason("[AI-OPS]", question)
+		if reason == "" {
+			reason = "[AI-OPS] diagnose"
+		}
+		return audit(r, tx, a, "ops_agent_diagnose", reason, map[string]any{
+			"run_id":              runID,
+			"mode":                res.Mode,
+			"steps_count":         len(res.Steps),
+			"proposal_request_id": res.ProposalRequestID,
+		})
+	})
+	return runID, now, e
+}
+
+func formatOpsAgentRunResponse(runID, gameID, adminID, question string, now int64, res opsagent.RunResult) map[string]any {
+	return map[string]any{
+		"run_id":              runID,
+		"game_id":             gameID,
+		"admin_id":            adminID,
+		"question":            question,
+		"mode":                res.Mode,
+		"model":               res.Model,
+		"real_ai":             res.Mode == "llm",
+		"status":              res.Status,
+		"summary":             res.Summary,
+		"root_cause":          res.RootCause,
+		"recommendation":      res.Recommendation,
+		"evidence_ids":        res.EvidenceIDs,
+		"proposal_request_id": res.ProposalRequestID,
+		"steps_count":         len(res.Steps),
+		"steps":               res.Steps,
+		"prompt_tokens":       res.PromptTokens,
+		"completion_tokens":   res.CompletionTokens,
+		"duration_ms":         res.DurationMS,
+		"created_at":          now,
+	}
 }
 
 func (s *Service) opsAgentRoutes(m *http.ServeMux) {
@@ -447,6 +527,7 @@ func (s *Service) opsAgentRoutes(m *http.ServeMux) {
 		mcpSrv := s.newMCPServer()
 		agentCtx := withMCPGM(r.Context(), a)
 		agentProto, agentURL, agentKey, agentModel := s.opsAgentConfig()
+		gw := aigateway.NewSession(httpserver.TraceID(r.Context()), "opsagent", a.Game, a.ID, s, b.RequestID, b.PlayerID, b.ActivityID, b.Question)
 		res, err := opsagent.Run(agentCtx, opsagent.ModelConfig{
 			Protocol: agentProto,
 			URL:      agentURL,
@@ -463,6 +544,7 @@ func (s *Service) opsAgentRoutes(m *http.ServeMux) {
 			AllowPropose:   b.AllowPropose,
 			ProposalItem:   strings.TrimSpace(b.ProposalItem),
 			ProposalAmount: b.ProposalAmount,
+			Gateway:        gw,
 		})
 		if err != nil {
 			var ae *opsagent.Error
@@ -472,57 +554,111 @@ func (s *Service) opsAgentRoutes(m *http.ServeMux) {
 			return nil, err
 		}
 
-		runID := "run-" + random()[:20]
-		now := time.Now().Unix()
-		if e = s.transaction(r.Context(), func(tx *sql.Tx) error {
-			if _, e := tx.ExecContext(r.Context(),
-				"INSERT INTO ops_agent_runs(id,game_id,admin_id,question,mode,model,status,summary,root_cause,recommendation,proposal_request_id,steps_count,prompt_tokens,completion_tokens,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-				runID, a.Game, a.ID, b.Question, res.Mode, res.Model, res.Status, res.Summary, res.RootCause, res.Recommendation, res.ProposalRequestID, len(res.Steps), res.PromptTokens, res.CompletionTokens, res.DurationMS, now,
-			); e != nil {
-				return e
-			}
-			for _, st := range res.Steps {
-				if _, e := tx.ExecContext(r.Context(),
-					"INSERT INTO ops_agent_steps(run_id,step_index,tool_name,arguments_json,result_summary,is_error,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?)",
-					runID, st.StepIndex, st.ToolName, st.ArgumentsJSON, st.ResultSummary, st.IsError, st.DurationMS, now,
-				); e != nil {
-					return e
-				}
-			}
-			reason, _ := sanitizeAIReason("[AI-OPS]", b.Question)
-			if reason == "" {
-				reason = "[AI-OPS] diagnose"
-			}
-			return audit(r, tx, a, "ops_agent_diagnose", reason, map[string]any{
-				"run_id":              runID,
-				"mode":                res.Mode,
-				"steps_count":         len(res.Steps),
-				"proposal_request_id": res.ProposalRequestID,
-			})
-		}); e != nil {
+		runID, now, e := s.persistOpsAgentRun(r.Context(), r, a, b.Question, res)
+		if e != nil {
 			return nil, e
 		}
+		return formatOpsAgentRunResponse(runID, a.Game, a.ID, b.Question, now, res), nil
+	})
 
-		return map[string]any{
-			"run_id":              runID,
-			"game_id":             a.Game,
-			"admin_id":            a.ID,
-			"question":            b.Question,
-			"mode":                res.Mode,
-			"model":               res.Model,
-			"real_ai":             res.Mode == "llm",
-			"status":              res.Status,
-			"summary":             res.Summary,
-			"root_cause":          res.RootCause,
-			"recommendation":      res.Recommendation,
-			"proposal_request_id": res.ProposalRequestID,
-			"steps_count":         len(res.Steps),
-			"steps":               res.Steps,
-			"prompt_tokens":       res.PromptTokens,
-			"completion_tokens":   res.CompletionTokens,
-			"duration_ms":         res.DurationMS,
-			"created_at":          now,
-		}, nil
+	// SSE streaming endpoint pushing real-time step/hook progress and canceling upstream calls on client disconnect.
+	m.HandleFunc("POST "+base+"/diagnose/stream", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+		r = r.WithContext(ctx)
+
+		a, err := s.gm(r, "read")
+		if err != nil {
+			status, code := 401, "gm_unauthorized"
+			var p Problem
+			if errors.As(err, &p) {
+				status, code = p.Status, p.Code
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+			return
+		}
+		if s.opsAgentActive != nil {
+			select {
+			case s.opsAgentActive <- struct{}{}:
+				defer func() { <-s.opsAgentActive }()
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(503)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "ops_agent_busy"})
+				return
+			}
+		}
+		var b struct {
+			Question       string `json:"question"`
+			PlayerID       string `json:"player_id"`
+			RequestID      string `json:"request_id"`
+			ActivityID     string `json:"activity_id"`
+			AllowPropose   bool   `json:"allow_propose"`
+			ProposalItem   string `json:"proposal_item"`
+			ProposalAmount int64  `json:"proposal_amount"`
+		}
+		if err := decode(r, &b); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		b.Question = strings.TrimSpace(b.Question)
+		if utf8.RuneCountInString(b.Question) < 2 || utf8.RuneCountInString(b.Question) > 1000 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_question"})
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+		writeSSE := func(evName string, payload any) {
+			raw, _ := json.Marshal(payload)
+			_, _ = w.Write([]byte("event: " + evName + "\ndata: " + string(raw) + "\n\n"))
+			_ = rc.Flush()
+		}
+
+		mcpSrv := s.newMCPServer()
+		agentCtx := withMCPGM(r.Context(), a)
+		agentProto, agentURL, agentKey, agentModel := s.opsAgentConfig()
+		gw := aigateway.NewSession(httpserver.TraceID(r.Context()), "opsagent_sse", a.Game, a.ID, s, b.RequestID, b.PlayerID, b.ActivityID, b.Question)
+		res, runErr := opsagent.Run(agentCtx, opsagent.ModelConfig{
+			Protocol: agentProto,
+			URL:      agentURL,
+			APIKey:   agentKey,
+			Model:    agentModel,
+			Sandbox:  s.Sandbox,
+		}, mcpServiceAdapter{srv: mcpSrv}, opsagent.RunRequest{
+			GameID:         a.Game,
+			AdminID:        a.ID,
+			Question:       b.Question,
+			PlayerID:       strings.TrimSpace(b.PlayerID),
+			RequestID:      strings.TrimSpace(b.RequestID),
+			ActivityID:     strings.TrimSpace(b.ActivityID),
+			AllowPropose:   b.AllowPropose,
+			ProposalItem:   strings.TrimSpace(b.ProposalItem),
+			ProposalAmount: b.ProposalAmount,
+			Gateway:        gw,
+			EventSink: func(ev opsagent.StreamEvent) {
+				writeSSE(ev.Type, ev)
+			},
+		})
+		if runErr != nil {
+			writeSSE("error", map[string]string{"error": runErr.Error()})
+			return
+		}
+		runID, now, err := s.persistOpsAgentRun(r.Context(), r, a, b.Question, res)
+		if err != nil {
+			writeSSE("error", map[string]string{"error": err.Error()})
+			return
+		}
+		writeSSE("final", formatOpsAgentRunResponse(runID, a.Game, a.ID, b.Question, now, res))
 	})
 
 	s.handle(m, "GET "+base+"/runs", func(r *http.Request) (any, error) {

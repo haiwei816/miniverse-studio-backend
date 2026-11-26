@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -47,6 +48,51 @@ func bucketFor(a Activity, now time.Time) string {
 	}
 	return "all"
 }
+func (s *Service) activeActivities(ctx context.Context, g string) ([]Activity, error) {
+	if s.activitiesCache != nil {
+		if cached, _, ok := s.activitiesCache.Get(g); ok {
+			if s.Telemetry != nil {
+				s.Telemetry.RecordCacheHit()
+			}
+			out := make([]Activity, len(cached))
+			copy(out, cached)
+			return out, nil
+		}
+	}
+	if s.Telemetry != nil {
+		s.Telemetry.RecordCacheMiss()
+	}
+	configs, err, _ := s.activitiesSF.Do(g, func() ([]Activity, error) {
+		rows, e := s.DB.QueryContext(ctx, "SELECT config FROM activities WHERE game_id=? AND active=TRUE ORDER BY id", g)
+		if e != nil {
+			return nil, e
+		}
+		defer rows.Close()
+		configs := []Activity{}
+		for rows.Next() {
+			var raw []byte
+			if e = rows.Scan(&raw); e != nil {
+				return nil, e
+			}
+			var a Activity
+			if e = json.Unmarshal(raw, &a); e != nil {
+				return nil, e
+			}
+			configs = append(configs, a)
+		}
+		if e = rows.Err(); e != nil {
+			return nil, e
+		}
+		if s.activitiesCache != nil {
+			copied := make([]Activity, len(configs))
+			copy(copied, configs)
+			s.activitiesCache.Set(g, copied, 5*time.Second)
+		}
+		return configs, nil
+	})
+	return configs, err
+}
+
 func (s *Service) activitiesRoutes(m *http.ServeMux) {
 	s.handle(m, "PUT /v1/games/{game}/activities", func(r *http.Request) (any, error) {
 		g, _, e := s.scope(r)
@@ -65,6 +111,9 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 		}
 		raw, _ := json.Marshal(a)
 		_, e = s.DB.ExecContext(r.Context(), "INSERT INTO activities(game_id,id,version,config,active) VALUES(?,?,?,?,TRUE) ON DUPLICATE KEY UPDATE config=IF(VALUES(version)>version,VALUES(config),config),version=GREATEST(version,VALUES(version))", g, a.ID, a.Version, raw)
+		if e == nil {
+			s.InvalidateActivitiesCache(g)
+		}
 		return a, e
 	})
 	s.handle(m, "GET /v1/games/{game}/activities", func(r *http.Request) (any, error) {
@@ -72,26 +121,7 @@ func (s *Service) activitiesRoutes(m *http.ServeMux) {
 		if e != nil {
 			return nil, e
 		}
-		rows, e := s.DB.QueryContext(r.Context(), "SELECT config FROM activities WHERE game_id=? AND active=TRUE ORDER BY id", g)
-		if e != nil {
-			return nil, e
-		}
-		configs := []Activity{}
-		for rows.Next() {
-			var raw []byte
-			if e = rows.Scan(&raw); e != nil {
-				rows.Close()
-				return nil, e
-			}
-			var a Activity
-			if e = json.Unmarshal(raw, &a); e != nil {
-				rows.Close()
-				return nil, e
-			}
-			configs = append(configs, a)
-		}
-		e = rows.Err()
-		rows.Close()
+		configs, e := s.activeActivities(r.Context(), g)
 		if e != nil {
 			return nil, e
 		}

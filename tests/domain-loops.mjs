@@ -190,7 +190,9 @@ const beforeInv = await api('/v1/games/card-game/inventory', 'GET', undefined, p
 const beforeGem = Number(beforeInv.gem || 0);
 
 const cupBoard = `cup-${suffix}`;
-const nowSec = Math.floor(Date.now() / 1000);
+const healthHdr = await fetch(base + '/health');
+const serverDateMs = Date.parse(healthHdr.headers.get('date') || '');
+const nowSec = Number.isFinite(serverDateMs) ? Math.floor(serverDateMs / 1000) : Math.floor(Date.now() / 1000);
 await api(
   '/gm/games/card-game/requests',
   'POST',

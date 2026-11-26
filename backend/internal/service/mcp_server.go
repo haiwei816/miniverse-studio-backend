@@ -278,6 +278,116 @@ func (s *Service) newMCPServer() *mcp.Server {
 	})
 
 	srv.RegisterTool(mcp.ToolSpec{
+		Name:        "inspect_mq_and_jobs",
+		Description: "查询 Transactional Outbox 事件积压/死信(DLQ)状态与大批量发奖任务(batch_grant_jobs)执行进度。",
+		ReadOnly:    true,
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []string{"game_id"},
+			"properties": map[string]any{
+				"game_id": map[string]any{"type": "string"},
+			},
+		},
+	}, func(ctx context.Context, args json.RawMessage) (any, error) {
+		gm, ok := mcpGMFromCtx(ctx)
+		if !ok {
+			return nil, bad(401, "gm_unauthorized")
+		}
+		var b struct {
+			GameID string `json:"game_id"`
+		}
+		if err := json.Unmarshal(args, &b); err != nil || strings.TrimSpace(b.GameID) == "" {
+			return nil, bad(400, "invalid_arguments")
+		}
+		if _, err := s.authorizeGMGame(ctx, gm, b.GameID, "read"); err != nil {
+			return nil, err
+		}
+		outboxStats, err := s.queryRowsGeneric(ctx, "SELECT status,COUNT(*) AS cnt FROM outbox_events GROUP BY status")
+		if err != nil {
+			return nil, err
+		}
+		jobs, err := s.queryRowsGeneric(ctx, "SELECT id,request_id,item,amount,total_players,succeeded_players,failed_players,state,last_error,created_at FROM batch_grant_jobs WHERE game_id=? ORDER BY created_at DESC LIMIT 20", b.GameID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"outbox_stats": outboxStats, "batch_jobs": jobs}, nil
+	})
+
+	srv.RegisterTool(mcp.ToolSpec{
+		Name:        "search_runbook",
+		Description: "渐进式检索运维 Runbook 知识库分块（BM25/关键词重排），按需返回最相关的 Top-K 排障指引以节省上下文 Token。",
+		ReadOnly:    true,
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []string{"query"},
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+				"top_k": map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
+			},
+		},
+	}, func(ctx context.Context, args json.RawMessage) (any, error) {
+		if _, ok := mcpGMFromCtx(ctx); !ok {
+			return nil, bad(401, "gm_unauthorized")
+		}
+		var b struct {
+			Query string `json:"query"`
+			TopK  int    `json:"top_k"`
+		}
+		if err := json.Unmarshal(args, &b); err != nil || strings.TrimSpace(b.Query) == "" {
+			return nil, bad(400, "invalid_arguments")
+		}
+		if b.TopK <= 0 || b.TopK > 5 {
+			b.TopK = 2
+		}
+		return map[string]any{"chunks": searchRunbookChunks(b.Query, b.TopK)}, nil
+	})
+
+	srv.RegisterTool(mcp.ToolSpec{
+		Name:        "inspect_player_summary",
+		Description: "轻量级渐进式玩家摘要：仅返回玩家名称、未领/过期邮件计数、库存种类数与最近 3 条异常错误码，避免直接调用全量 diagnose_player 导致上下文膨胀。",
+		ReadOnly:    true,
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []string{"game_id", "player_id"},
+			"properties": map[string]any{
+				"game_id":   map[string]any{"type": "string"},
+				"player_id": map[string]any{"type": "string"},
+			},
+		},
+	}, func(ctx context.Context, args json.RawMessage) (any, error) {
+		gm, ok := mcpGMFromCtx(ctx)
+		if !ok {
+			return nil, bad(401, "gm_unauthorized")
+		}
+		var b struct {
+			GameID   string `json:"game_id"`
+			PlayerID string `json:"player_id"`
+		}
+		if err := json.Unmarshal(args, &b); err != nil || strings.TrimSpace(b.GameID) == "" || strings.TrimSpace(b.PlayerID) == "" {
+			return nil, bad(400, "invalid_arguments")
+		}
+		if _, err := s.authorizeGMGame(ctx, gm, b.GameID, "read"); err != nil {
+			return nil, err
+		}
+		var name string
+		if err := s.DB.QueryRowContext(ctx, "SELECT name FROM profiles WHERE game_id=? AND player_id=?", b.GameID, b.PlayerID).Scan(&name); err != nil {
+			return nil, bad(404, "player_not_found")
+		}
+		var unclaimed, expired int64
+		now := time.Now().Unix()
+		_ = s.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(claimed=FALSE AND expires_at>?),0),COALESCE(SUM(claimed=FALSE AND expires_at<=?),0) FROM mail WHERE game_id=? AND player_id=?", now, now, b.GameID, b.PlayerID).Scan(&unclaimed, &expired)
+		opsEvents, _ := s.queryOpsEvents(ctx, b.GameID, b.PlayerID, "", "", "", 0, 3)
+		return map[string]any{
+			"game_id":           b.GameID,
+			"player_id":         b.PlayerID,
+			"name":              name,
+			"unclaimed_mails":   unclaimed,
+			"expired_mails":     expired,
+			"recent_ops_events": opsEvents,
+		}, nil
+	})
+
+	srv.RegisterTool(mcp.ToolSpec{
 		Name:        "propose_reward_compensation",
 		Description: "受控写操作：为单个玩家创建一笔状态为 pending 的道具补发审批单（必须由另一位人类 reviewer 审核批准后才会发奖，AI 无权直接发奖或自审）。",
 		ReadOnly:    false,
@@ -497,11 +607,66 @@ const opsRunbookMarkdown = `# MiniVerse Ops Troubleshooting Runbook
 - **mail_expired (410) / 奖励未到账**: 使用 explain_reward_issue 依次核对活动时间窗（UTC）、client_allowed、事件去重、activity_progress、grants、mail 状态（未领/已过期/未领先删/已领入账）。
 - **rate_limited (429) / auth_rate_limited (429)**: 单 IP 或账号触发频控（普通 600/min，登录 30/min）。通过 query_ops_logs 按 IP/接口统计突增来源。
 - **transaction_busy (503)**: MySQL 死锁/锁超时重试耗尽，结合 telemetry.deadlock_retries 与近期并发写热点分析。
+- **rulecore_circuit_open (503)**: RuleCore 连续失败触发三态熔断器快速失败保护，等待 3 秒冷却后自动进入 Half-Open 探测恢复。
+- **outbox_dlq / batch_grant_jobs**: 大批量发奖由 Transactional Outbox + Kafka 异步分批执行，失败超限转入 DLQ，可通过 inspect_mq_and_jobs 核查。
 
 ## 2. 受控运维护栏
-- AI / MCP 仅允许执行只读诊断工具，或生成 state=pending 的审批草案（propose_reward_compensation / propose_activity_stop）。
+- AI / MCP 仅允许执行只读诊断工具，或生成 state=pending 的审批草案（propose_reward_compensation / propose_activity_stop / propose_player_freeze）。
 - 任何写操作必须由另一位具备 approve 权限的管理员（reviewer / admin）核对证据后人工批准。
 `
+
+func searchRunbookChunks(query string, topK int) []map[string]any {
+	type chunk struct {
+		id    string
+		title string
+		body  string
+	}
+	chunks := []chunk{
+		{id: "rulecore_unavailable", title: "rulecore_unavailable / rulecore_circuit_open (503)", body: "Go 到 C++20 RuleCore gRPC 服务超时、不可达或触发三态熔断器。调用 inspect_service_health 核查 rulecore_reachable 与 rulecore_circuit_opens，普通云存档与活动不受影响。"},
+		{id: "revision_conflict", title: "revision_conflict (409)", body: "玩家多端并发或离线旧存档覆盖。使用 inspect_player_summary 或 diagnose_player 对比 saves.revision，引导客户端拉取云端版本解决冲突。"},
+		{id: "reward_mail_expired", title: "mail_expired (410) / 奖励未到账", body: "使用 explain_reward_issue 依次核对活动时间窗（UTC）、client_allowed、事件去重、activity_progress、grants 与 mail 状态（未领/已过期/已领入账）。"},
+		{id: "rate_limited", title: "rate_limited (429) / 限流采样", body: "触发单机或 Redis 两级限流（普通 600/min，登录 30/min）。系统采用 429 突发采样与异步微批写入 ops_events 保护 MySQL 连接池。"},
+		{id: "outbox_dlq", title: "outbox / batch_grant_jobs 异步发奖", body: "大批量或全服补偿通过 Outbox + Kafka 异步分批执行。使用 inspect_mq_and_jobs 检查 outbox_events 待投递/DLQ 计数及 batch_grant_jobs 进度。"},
+		{id: "hitl_guardrails", title: "AI 四钩子护栏与双人审批", body: "AI Gateway 在 LLMInput/ToolPreInvoke/ToolPostInvoke/LLMOutput 执行 PII 脱敏、Schema 校验、单笔额度限制（<=10000）与 Groundedness 校验，写操作仅生成 pending 工单。"},
+	}
+	qLower := strings.ToLower(query)
+	terms := strings.Fields(strings.NewReplacer(",", " ", "，", " ", ":", " ", "_", " ").Replace(qLower))
+	type scored struct {
+		c     chunk
+		score int
+	}
+	var ranked []scored
+	for _, c := range chunks {
+		hay := strings.ToLower(c.id + " " + c.title + " " + c.body)
+		sc := 0
+		if strings.Contains(hay, qLower) {
+			sc += 5
+		}
+		for _, t := range terms {
+			if len(t) >= 2 && strings.Contains(hay, t) {
+				sc += 2
+			}
+		}
+		ranked = append(ranked, scored{c: c, score: sc})
+	}
+	for i := 0; i < len(ranked); i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			if ranked[j].score > ranked[i].score {
+				ranked[i], ranked[j] = ranked[j], ranked[i]
+			}
+		}
+	}
+	out := make([]map[string]any, 0, min(topK, len(ranked)))
+	for i := 0; i < len(ranked) && i < topK; i++ {
+		out = append(out, map[string]any{
+			"chunk_id": ranked[i].c.id,
+			"title":    ranked[i].c.title,
+			"score":    ranked[i].score,
+			"content":  ranked[i].c.body,
+		})
+	}
+	return out
+}
 
 func (s *Service) explainRewardIssue(ctx context.Context, game, player, activityID string) (map[string]any, error) {
 	var profileName string

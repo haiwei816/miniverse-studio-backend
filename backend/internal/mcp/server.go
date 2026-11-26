@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 const (
@@ -48,8 +51,9 @@ type RPCError struct {
 func (e *RPCError) Error() string { return fmt.Sprintf("rpc(%d): %s", e.Code, e.Message) }
 
 type registeredTool struct {
-	spec    ToolSpec
-	handler ToolHandler
+	spec           ToolSpec
+	handler        ToolHandler
+	compiledSchema *jsonschema.Schema
 }
 
 type registeredResource struct {
@@ -79,11 +83,35 @@ func NewServer(name, version string, filter func(ctx context.Context, tool ToolS
 	}
 }
 
+func compileToolSchema(name string, schema map[string]any) *jsonschema.Schema {
+	if len(schema) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	c := jsonschema.NewCompiler()
+	resName := name + ".schema.json"
+	if c.AddResource(resName, bytes.NewReader(raw)) != nil {
+		return nil
+	}
+	compiled, err := c.Compile(resName)
+	if err != nil {
+		return nil
+	}
+	return compiled
+}
+
 func (s *Server) RegisterTool(spec ToolSpec, handler ToolHandler) {
 	if _, exists := s.tools[spec.Name]; !exists {
 		s.toolOrder = append(s.toolOrder, spec.Name)
 	}
-	s.tools[spec.Name] = registeredTool{spec: spec, handler: handler}
+	s.tools[spec.Name] = registeredTool{
+		spec:           spec,
+		handler:        handler,
+		compiledSchema: compileToolSchema(spec.Name, spec.InputSchema),
+	}
 }
 
 func (s *Server) RegisterResource(spec ResourceSpec, handler ResourceHandler) {
@@ -120,6 +148,16 @@ func (s *Server) CallTool(ctx context.Context, name string, args json.RawMessage
 	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
+	}
+	if rt.compiledSchema != nil {
+		var val any
+		dec := json.NewDecoder(bytes.NewReader(args))
+		dec.UseNumber()
+		if err := dec.Decode(&val); err != nil || rt.compiledSchema.Validate(val) != nil {
+			payload := map[string]any{"error": "invalid_arguments"}
+			raw, _ := json.Marshal(payload)
+			return string(raw), payload, true, nil
+		}
 	}
 	res, err := rt.handler(ctx, args)
 	if err != nil {

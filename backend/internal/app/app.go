@@ -48,6 +48,8 @@ func Run(cfg config.Config) error {
 	svc.OpsAgentModel = cfg.OpsAgentModel
 	svc.OpsAgentSecretKey = cfg.OpsAgentSecretKey
 	svc.MetricsBearerToken = cfg.MetricsBearerToken
+	svc.RedisAddr = cfg.RedisAddr
+	svc.KafkaBrokers = cfg.KafkaBrokers
 	svc.PersistOpsEvents = true
 	defer svc.Close()
 	if err := svc.Initialize(); err != nil {

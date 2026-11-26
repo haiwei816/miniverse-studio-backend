@@ -33,8 +33,9 @@ try {
     { input: dumpSQL, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120000 },
   );
 
+  const expectedSchema = Math.max(...migrationFiles.map((f) => Number(f.split('_')[0])));
   const schemaVersion = Number(mysqlExec('SELECT MAX(version) FROM schema_migrations;', verifyDB));
-  assert.equal(schemaVersion, 25, `Expected restored schema_migrations version 25, got ${schemaVersion}`);
+  assert.equal(schemaVersion, expectedSchema, `Expected restored schema_migrations version ${expectedSchema}, got ${schemaVersion}`);
 
   const migCount = Number(mysqlExec('SELECT COUNT(*) FROM migration_files;', verifyDB));
   assert.equal(migCount, migrationFiles.length, `Expected ${migrationFiles.length} migration_files rows, got ${migCount}`);

@@ -415,7 +415,7 @@ assert.equal(rpcLines.length, 3, `expected 3 JSON-RPC replies from /app/mcp stdi
 assert.equal(rpcLines[0].id, 1);
 assert.equal(rpcLines[0].result?.protocolVersion, '2025-03-26');
 assert.equal(rpcLines[1].id, 2);
-assert.equal(rpcLines[1].result?.tools?.length, 9);
+assert.equal(rpcLines[1].result?.tools?.length, 12);
 assert.equal(rpcLines[2].id, 3);
 assert.equal(rpcLines[2].result?.isError, false);
 assert.equal(rpcLines[2].result?.structuredContent?.db_ready, true);

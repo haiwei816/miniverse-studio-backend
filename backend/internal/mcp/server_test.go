@@ -20,7 +20,12 @@ func newTestServer() *Server {
 		Name:        "read_status",
 		Description: "Read health",
 		ReadOnly:    true,
-		InputSchema: map[string]any{"type": "object"},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"fail": map[string]any{"type": "boolean"},
+			},
+		},
 	}, func(_ context.Context, _ json.RawMessage) (any, error) {
 		return map[string]any{"ok": true}, nil
 	})
@@ -28,7 +33,12 @@ func newTestServer() *Server {
 		Name:        "write_proposal",
 		Description: "Write proposal",
 		ReadOnly:    false,
-		InputSchema: map[string]any{"type": "object"},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"fail": map[string]any{"type": "boolean"},
+			},
+		},
 	}, func(_ context.Context, args json.RawMessage) (any, error) {
 		var b struct {
 			Fail bool `json:"fail"`
@@ -117,5 +127,14 @@ func TestServeStdioStreamsMessages(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 responses, got %d: %q", len(lines), out.String())
+	}
+}
+
+func TestCallToolValidatesInputSchema(t *testing.T) {
+	s := newTestServer()
+	opCtx := context.WithValue(context.Background(), roleKey{}, "operator")
+	text, _, isErr, rpcErr := s.CallTool(opCtx, "write_proposal", json.RawMessage(`{"fail":"not-a-bool"}`))
+	if rpcErr != nil || !isErr || !strings.Contains(text, "invalid_arguments") {
+		t.Fatalf("expected schema rejection invalid_arguments, got text=%q isErr=%v rpcErr=%v", text, isErr, rpcErr)
 	}
 }

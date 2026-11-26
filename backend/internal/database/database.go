@@ -5,17 +5,20 @@ import (
 	"database/sql"
 	"errors"
 	_ "github.com/go-sql-driver/mysql"
+	"time"
 )
 
-const ExpectedSchemaVersion = 25
+const ExpectedSchemaVersion = 26
 
 func Open(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(8)
+	db.SetMaxOpenConns(24)
+	db.SetMaxIdleConns(12)
+	db.SetConnMaxLifetime(15 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	return db, nil
 }
 func Ready(ctx context.Context, db *sql.DB) error {

@@ -39,8 +39,37 @@ services:
       OPS_AGENT_MODEL: ${OPS_AGENT_MODEL:-}
       OPS_AGENT_SECRET_KEY: ${OPS_AGENT_SECRET_KEY:-}
       METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-sandbox-metrics-scrape-token}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-redpanda:9092}
     depends_on:
       mysql: {condition: service_healthy}
+  redis:
+    image: redis:7.4-alpine
+    logging: *bounded_logs
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
+    logging: *bounded_logs
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=256M
+      - --overprovisioned
+      - --kafka-addr=internal://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:9092
+    expose: ["9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
   api:
     image: miniverse-api:local
     logging: *bounded_logs
@@ -51,6 +80,7 @@ services:
     ports: ["127.0.0.1:${API_PORT:-18080}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/ready"]
       interval: 5s

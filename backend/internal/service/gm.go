@@ -345,6 +345,9 @@ func (s *Service) gmRoutes(m *http.ServeMux) {
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
 			return s.applyPlayerBanTx(r.Context(), tx, a, p, reason, b.ExpiresAt)
 		})
+		if e == nil {
+			s.InvalidateBanCache(p)
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "POST /gm/games/{game}/players/{player}/unban", func(r *http.Request) (any, error) {
@@ -371,6 +374,9 @@ func (s *Service) gmRoutes(m *http.ServeMux) {
 			}
 			return audit(r, tx, a, "player_unbanned", reason, map[string]string{"player_id": p})
 		})
+		if e == nil {
+			s.InvalidateBanCache(p)
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /gm/games/{game}/audit", func(r *http.Request) (any, error) {

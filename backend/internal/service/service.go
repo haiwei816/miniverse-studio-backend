@@ -13,7 +13,12 @@ import (
 	"google.golang.org/grpc"
 	"io"
 	"log/slog"
+	"miniverse/backend/internal/cache"
 	"miniverse/backend/internal/httpserver"
+	"miniverse/backend/internal/lock"
+	"miniverse/backend/internal/mq"
+	"miniverse/backend/internal/redisx"
+	"miniverse/backend/internal/resilience"
 	"miniverse/backend/internal/telemetry"
 	"net/http"
 	"net/netip"
@@ -37,6 +42,8 @@ type Service struct {
 	OpsAgentModel         string
 	OpsAgentSecretKey     []byte
 	MetricsBearerToken    string
+	RedisAddr             string
+	KafkaBrokers          []string
 	opsAgentMu            sync.RWMutex
 	PersistOpsEvents      bool
 	Telemetry             *telemetry.Recorder
@@ -54,14 +61,52 @@ type Service struct {
 	opsAgentActive        chan struct{}
 	ConcurrentDiagnostics bool
 	EnforceBans           bool
-	gameCacheMu           sync.RWMutex
-	gameCache             map[string]gameCacheEntry
+	gameCache             *cache.ShardedLRU[bool]
+	gameCacheSF           cache.Group[bool]
+	activitiesCache       *cache.ShardedLRU[[]Activity]
+	activitiesSF          cache.Group[[]Activity]
+	banCache              *cache.ShardedLRU[bool]
+	boardSF               cache.Group[boardData]
+	ruleBreaker           *resilience.CircuitBreaker
+	redisRateLimiter      *resilience.TwoTierLimiter
+	Redis                 *redisx.Client
+	LockStore             lock.Store
+	MQTransport           mq.Transport
+	OutboxRelay           *mq.OutboxRelay
+	kafkaConsumers        []*mq.KafkaConsumerGroup
+	stopInvalidationSub   func()
+	stopSeasonSettler     func()
 	ruleMu                sync.Mutex
 	ruleAddr              string
 	ruleConn              *grpc.ClientConn
+	opsCh                 chan opsEventTask
+	opsStopOnce           sync.Once
+	opsStopCh             chan struct{}
+	opsDoneCh             chan struct{}
+	opsRateMu             sync.Mutex
+	opsRateLastLog        map[string]int64
 }
 
 func (s *Service) Close() error {
+	if s.stopSeasonSettler != nil {
+		s.stopSeasonSettler()
+	}
+	if s.stopInvalidationSub != nil {
+		s.stopInvalidationSub()
+	}
+	for _, cg := range s.kafkaConsumers {
+		cg.Stop()
+	}
+	if s.OutboxRelay != nil {
+		s.OutboxRelay.Stop()
+	}
+	if s.MQTransport != nil {
+		_ = s.MQTransport.Close()
+	}
+	if s.Redis != nil {
+		_ = s.Redis.Close()
+	}
+	s.stopOpsWriter()
 	s.ruleMu.Lock()
 	defer s.ruleMu.Unlock()
 	if s.ruleConn == nil {
@@ -71,11 +116,6 @@ func (s *Service) Close() error {
 	s.ruleConn = nil
 	s.ruleAddr = ""
 	return err
-}
-
-type gameCacheEntry struct {
-	active    bool
-	expiresAt time.Time
 }
 
 type bucket struct {
@@ -90,7 +130,7 @@ type Problem struct {
 func (p Problem) Error() string { return p.Code }
 func bad(s int, c string) error { return Problem{s, c} }
 func New(db *sql.DB, sandbox bool) *Service {
-	return &Service{
+	svc := &Service{
 		DB:                    db,
 		Sandbox:               sandbox,
 		RuleCoreAddr:          "rulecore:50051",
@@ -102,52 +142,106 @@ func New(db *sql.DB, sandbox bool) *Service {
 		companionLimits:       map[string]bucket{},
 		companionActive:       make(chan struct{}, 16),
 		opsAgentActive:        make(chan struct{}, 8),
-		gameCache:             map[string]gameCacheEntry{},
+		gameCache:             cache.NewShardedLRU[bool](1024),
+		activitiesCache:       cache.NewShardedLRU[[]Activity](512),
+		banCache:              cache.NewShardedLRU[bool](4096),
+		ruleBreaker:           resilience.NewCircuitBreaker(5, 3*time.Second),
+		redisRateLimiter:      resilience.NewTwoTierLimiter(nil, "mv:rl:api", 600, 10000),
+		opsRateLastLog:        map[string]int64{},
 	}
+	return svc
 }
 
 // InvalidateGameCache evicts cached active state for a game (or all games when empty).
 func (s *Service) InvalidateGameCache(gameID string) {
-	s.gameCacheMu.Lock()
-	defer s.gameCacheMu.Unlock()
-	if s.gameCache == nil {
+	if s.gameCache != nil {
+		if gameID == "" {
+			s.gameCache.Clear()
+		} else {
+			s.gameCache.Delete(gameID)
+		}
+	}
+	if s.Redis != nil {
+		s.Redis.PublishInvalidation(context.Background(), redisx.InvalidationEvent{
+			Kind:   "game",
+			GameID: gameID,
+		})
+	}
+}
+
+// InvalidateActivitiesCache evicts cached active activity configs for a game.
+func (s *Service) InvalidateActivitiesCache(gameID string) {
+	if s.activitiesCache != nil {
+		if gameID == "" {
+			s.activitiesCache.Clear()
+		} else {
+			s.activitiesCache.Delete(gameID)
+		}
+	}
+	if s.Redis != nil {
+		s.Redis.PublishInvalidation(context.Background(), redisx.InvalidationEvent{
+			Kind:   "activity",
+			GameID: gameID,
+		})
+	}
+}
+
+// InvalidateBanCache evicts local/Redis ban state for player and notifies peer instances.
+func (s *Service) InvalidateBanCache(playerID string) {
+	if playerID == "" {
 		return
 	}
-	if gameID == "" {
-		clear(s.gameCache)
-		return
+	if s.banCache != nil {
+		s.banCache.Delete(playerID)
 	}
-	delete(s.gameCache, gameID)
+	if s.Redis != nil && s.Redis.Raw() != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		_ = s.Redis.Raw().Del(ctx, "mv:ban:"+playerID).Err()
+		cancel()
+		s.Redis.PublishInvalidation(context.Background(), redisx.InvalidationEvent{
+			Kind:     "ban",
+			PlayerID: playerID,
+		})
+	}
 }
 
 func (s *Service) gameActive(ctx context.Context, gameID string) (bool, error) {
-	now := time.Now()
-	s.gameCacheMu.RLock()
-	entry, ok := s.gameCache[gameID]
-	s.gameCacheMu.RUnlock()
-	if ok && entry.expiresAt.After(now) {
-		return entry.active, nil
-	}
-	var active bool
-	err := s.DB.QueryRowContext(ctx, "SELECT active FROM games WHERE id=?", gameID).Scan(&active)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if active {
-		s.gameCacheMu.Lock()
-		if s.gameCache == nil {
-			s.gameCache = map[string]gameCacheEntry{}
+	if s.gameCache != nil {
+		if active, neg, ok := s.gameCache.Get(gameID); ok {
+			if s.Telemetry != nil {
+				s.Telemetry.RecordCacheHit()
+			}
+			if neg {
+				return false, nil
+			}
+			return active, nil
 		}
-		if len(s.gameCache) >= 1024 {
-			clear(s.gameCache)
-		}
-		s.gameCache[gameID] = gameCacheEntry{active: true, expiresAt: now.Add(5 * time.Second)}
-		s.gameCacheMu.Unlock()
 	}
-	return active, nil
+	if s.Telemetry != nil {
+		s.Telemetry.RecordCacheMiss()
+	}
+	active, err, _ := s.gameCacheSF.Do(gameID, func() (bool, error) {
+		var active bool
+		err := s.DB.QueryRowContext(ctx, "SELECT active FROM games WHERE id=?", gameID).Scan(&active)
+		if errors.Is(err, sql.ErrNoRows) {
+			if s.gameCache != nil {
+				s.gameCache.SetNegative(gameID, 3*time.Second)
+			}
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if s.gameCache != nil {
+			if active {
+				s.gameCache.Set(gameID, true, 5*time.Second)
+			} else {
+				s.gameCache.Set(gameID, false, 3*time.Second)
+			}
+		}
+		return active, nil
+	})
+	return active, err
 }
 func random() string {
 	b := make([]byte, 24)
@@ -304,6 +398,22 @@ func (s *Service) checkPlayerBanWith(ctx context.Context, q rowQuerier, game, pl
 	if !s.EnforceBans || player == "" {
 		return nil
 	}
+	if q == s.DB && game == "" && s.banCache != nil {
+		if banned, _, ok := s.banCache.Get(player); ok && !banned {
+			return nil
+		}
+	}
+	if q == s.DB && game == "" && s.Redis != nil && s.Redis.Raw() != nil {
+		rCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		val, rErr := s.Redis.Raw().Get(rCtx, "mv:ban:"+player).Result()
+		cancel()
+		if rErr == nil && val == "0" {
+			if s.banCache != nil {
+				s.banCache.Set(player, false, 3*time.Second)
+			}
+			return nil
+		}
+	}
 	now := time.Now().Unix()
 	var n int
 	var err error
@@ -314,6 +424,17 @@ func (s *Service) checkPlayerBanWith(ctx context.Context, q rowQuerier, game, pl
 	}
 	if err != nil {
 		return err
+	}
+	// Cache only non-banned state so temporary bans (expires_at) lift instantaneously upon expiry.
+	if q == s.DB && game == "" && n == 0 {
+		if s.banCache != nil {
+			s.banCache.Set(player, false, 3*time.Second)
+		}
+		if s.Redis != nil && s.Redis.Raw() != nil {
+			rCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			_ = s.Redis.Raw().Set(rCtx, "mv:ban:"+player, "0", 15*time.Second).Err()
+			cancel()
+		}
 	}
 	if n > 0 {
 		return bad(403, "account_suspended")

@@ -1,0 +1,39 @@
+{
+  "ablation": [
+    {
+      "variant": "1_baseline_no_gateway_full_ctx",
+      "total_cases": 30,
+      "passed_cases": 17,
+      "pass_rate_pct": 56.666666666666664,
+      "safety_block_rate_pct": 25,
+      "avg_steps": 1.7,
+      "total_prompt_tokens": 49697,
+      "total_completion_tokens": 3240,
+      "avg_duration_ms": 0.7
+    },
+    {
+      "variant": "2_progressive_retrieval_only",
+      "total_cases": 30,
+      "passed_cases": 17,
+      "pass_rate_pct": 56.666666666666664,
+      "safety_block_rate_pct": 25,
+      "avg_steps": 1.5,
+      "total_prompt_tokens": 24491,
+      "total_completion_tokens": 3240,
+      "avg_duration_ms": 0.43333333333333335
+    },
+    {
+      "variant": "3_progressive_plus_4hook_gateway",
+      "total_cases": 30,
+      "passed_cases": 30,
+      "pass_rate_pct": 100,
+      "safety_block_rate_pct": 100,
+      "avg_steps": 1.1,
+      "total_prompt_tokens": 17446,
+      "total_completion_tokens": 2430,
+      "avg_duration_ms": 0.5666666666666667
+    }
+  ],
+  "generated_at": "2026-11-26T15:02:25+08:00",
+  "total_cases": 30
+}

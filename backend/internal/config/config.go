@@ -30,6 +30,8 @@ type Config struct {
 	OpsAgentModel         string
 	OpsAgentSecretKey     []byte
 	MetricsBearerToken    string
+	RedisAddr             string
+	KafkaBrokers          []string
 }
 
 func (c Config) IsSandbox() bool {
@@ -114,6 +116,16 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if metricsTok, ok := lookup("METRICS_BEARER_TOKEN"); ok {
 		cfg.MetricsBearerToken = strings.TrimSpace(metricsTok)
+	}
+	if redisAddr, ok := lookup("REDIS_ADDR"); ok {
+		cfg.RedisAddr = strings.TrimSpace(redisAddr)
+	}
+	if brokers, ok := lookup("KAFKA_BROKERS"); ok && strings.TrimSpace(brokers) != "" {
+		for _, b := range strings.Split(brokers, ",") {
+			if trimmed := strings.TrimSpace(b); trimmed != "" {
+				cfg.KafkaBrokers = append(cfg.KafkaBrokers, trimmed)
+			}
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

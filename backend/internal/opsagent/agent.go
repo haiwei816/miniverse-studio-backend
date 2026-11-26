@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"miniverse/backend/internal/aigateway"
 	"miniverse/backend/internal/mcp"
 	"net/http"
 	"net/url"
@@ -104,6 +105,16 @@ type ModelConfig struct {
 	Sandbox  bool
 }
 
+// StreamEvent reports real-time progress for SSE diagnostic streaming.
+type StreamEvent struct {
+	Type    string `json:"type"`
+	Step    int    `json:"step,omitempty"`
+	Tool    string `json:"tool,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Payload any    `json:"payload,omitempty"`
+}
+
 type RunRequest struct {
 	GameID         string
 	AdminID        string
@@ -114,6 +125,8 @@ type RunRequest struct {
 	AllowPropose   bool
 	ProposalItem   string
 	ProposalAmount int64
+	Gateway        *aigateway.Session
+	EventSink      func(StreamEvent)
 }
 
 type StepTrace struct {
@@ -133,6 +146,7 @@ type RunResult struct {
 	Summary           string      `json:"summary"`
 	RootCause         string      `json:"root_cause"`
 	Recommendation    string      `json:"recommendation"`
+	EvidenceIDs       []string    `json:"evidence_ids,omitempty"`
 	ProposalRequestID string      `json:"proposal_request_id"`
 	Steps             []StepTrace `json:"steps"`
 	PromptTokens      int         `json:"prompt_tokens"`
@@ -384,14 +398,139 @@ func Run(ctx context.Context, cfg ModelConfig, client MCPClient, req RunRequest)
 	}
 	cfg.URL = normalized
 	cfg.Protocol = proto
+
+	// Hook 1: LLMInputHook — prompt injection check & PII masking before outbound LLM call.
+	if req.Gateway != nil {
+		maskedQ, blockedReason := req.Gateway.HookLLMInput(ctx, req.Question)
+		if blockedReason != "" {
+			emitStream(req.EventSink, StreamEvent{Type: "hook_blocked", Status: blockedReason, Detail: "LLMInputHook blocked potential prompt injection"})
+			return RunResult{
+				Mode:           "llm_gateway_blocked",
+				Model:          cfg.Model,
+				Status:         blockedReason,
+				Summary:        "请求被 AI 安全网关 LLMInput 钩子拦截。",
+				RootCause:      "检测到越权指令或 Prompt 注入特征（" + blockedReason + "）。",
+				Recommendation: "请移除绕过审批或系统提示词覆盖语句后重试。",
+				Steps:          []StepTrace{},
+				DurationMS:     time.Since(started).Milliseconds(),
+			}, nil
+		}
+		req.Question = maskedQ
+	}
+
 	var res RunResult
 	if proto == ProtocolAnthropic {
 		res, err = runAnthropicLLM(ctx, cfg, client, req)
 	} else {
 		res, err = runLLM(ctx, cfg, client, req)
 	}
+	if err == nil && req.Gateway != nil {
+		// Hook 4: LLMOutputHook — groundedness verification + PII restoration.
+		sum, rc, rec, downgraded, reason := req.Gateway.HookLLMOutput(ctx, res.Summary, res.RootCause, res.Recommendation, res.EvidenceIDs)
+		if downgraded {
+			emitStream(req.EventSink, StreamEvent{Type: "hook_downgrade", Status: reason, Detail: "LLMOutputHook downgraded ungrounded response to deterministic playbook"})
+			pb, pbErr := runPlaybook(ctx, client, req)
+			if pbErr == nil {
+				pb.Status = "hallucination_downgraded"
+				pb.PromptTokens += res.PromptTokens
+				pb.CompletionTokens += res.CompletionTokens
+				pb.Summary = "[网关降级:" + reason + "] " + pb.Summary
+				pb.DurationMS = time.Since(started).Milliseconds()
+				return pb, nil
+			}
+			res.Status = "hallucination_downgraded"
+		} else {
+			res.Summary, res.RootCause, res.Recommendation = sum, rc, rec
+		}
+	}
 	res.DurationMS = time.Since(started).Milliseconds()
 	return res, err
+}
+
+func emitStream(sink func(StreamEvent), ev StreamEvent) {
+	if sink != nil {
+		sink(ev)
+	}
+}
+
+// SimpleTextMessage represents a single turn in ChatCompletions or Anthropic Messages.
+type SimpleTextMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// CallSimpleText invokes OpenAI or Anthropic text completion through the shared SSRF-safe HTTP client.
+func CallSimpleText(ctx context.Context, cfg ModelConfig, systemPrompt string, history []SimpleTextMessage, userPrompt string, maxTokens int) (string, int, int, error) {
+	normalized, proto, err := ValidateModelConfig(cfg)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	cfg.URL = normalized
+	cfg.Protocol = proto
+	if maxTokens <= 0 {
+		maxTokens = 800
+	}
+	httpClient := NewSafeHTTPClient(15*time.Second, cfg.Sandbox)
+	if proto == ProtocolAnthropic {
+		msgs := make([]anthropicMessage, 0, len(history)+1)
+		for _, h := range history {
+			msgs = append(msgs, anthropicMessage{Role: h.Role, Content: h.Content})
+		}
+		msgs = append(msgs, anthropicMessage{Role: "user", Content: userPrompt})
+		txt, _, usage, callErr := callAnthropicMessages(ctx, httpClient, cfg, systemPrompt, msgs, nil)
+		return txt, usage.PromptTokens, usage.CompletionTokens, callErr
+	}
+	msgs := make([]chatMessage, 0, len(history)+2)
+	if strings.TrimSpace(systemPrompt) != "" {
+		msgs = append(msgs, chatMessage{Role: "system", Content: systemPrompt})
+	}
+	for _, h := range history {
+		msgs = append(msgs, chatMessage{Role: h.Role, Content: h.Content})
+	}
+	msgs = append(msgs, chatMessage{Role: "user", Content: userPrompt})
+	msg, usage, callErr := callOpenAIChat(ctx, httpClient, cfg, msgs, nil)
+	return msg.Content, usage.PromptTokens, usage.CompletionTokens, callErr
+}
+
+func executeToolWithGateway(ctx context.Context, client MCPClient, allowedMap map[string]mcp.ToolSpec, gw *aigateway.Session, sink func(StreamEvent), stepNum int, toolName, argsText string) (truncatedOut string, structured any, isErr bool, durMS int64, loopBroken bool) {
+	tStart := time.Now()
+	emitStream(sink, StreamEvent{Type: "step_start", Step: stepNum, Tool: toolName, Detail: argsText})
+
+	spec, ok := allowedMap[toolName]
+	var outText string
+	if !ok {
+		isErr = true
+		outText = `{"error":"tool_not_allowed"}`
+	} else if gw != nil {
+		// Hook 2: ToolPreInvokeHook — schema check, OPA policy, duplicate loop breaker.
+		if allowed, reason := gw.HookToolPreInvoke(ctx, toolName, spec.InputSchema, json.RawMessage(argsText)); !allowed {
+			isErr = true
+			loopBroken = reason == "loop_circuit_broken"
+			errJSON, _ := json.Marshal(map[string]string{"error": reason, "hook": "tool_pre_invoke"})
+			outText = string(errJSON)
+			emitStream(sink, StreamEvent{Type: "hook_blocked", Step: stepNum, Tool: toolName, Status: reason})
+		}
+	}
+
+	if !isErr {
+		var callErr error
+		outText, structured, isErr, callErr = client.CallTool(ctx, toolName, json.RawMessage(argsText))
+		if callErr != nil {
+			isErr = true
+			errJSON, _ := json.Marshal(map[string]string{"error": callErr.Error()})
+			outText = string(errJSON)
+		}
+	}
+
+	// Hook 3: ToolPostInvokeHook — PII masking & valid JSON compaction.
+	if gw != nil {
+		truncatedOut = gw.HookToolPostInvoke(ctx, toolName, outText, maxStepResultChars)
+	} else {
+		truncatedOut = truncateRunes(outText, maxStepResultChars)
+	}
+	durMS = time.Since(tStart).Milliseconds()
+	emitStream(sink, StreamEvent{Type: "step_done", Step: stepNum, Tool: toolName, Status: map[bool]string{true: "error", false: "ok"}[isErr]})
+	return truncatedOut, structured, isErr, durMS, loopBroken
 }
 
 func filterAllowedTools(all []mcp.ToolSpec, allowPropose bool) ([]mcp.ToolSpec, map[string]mcp.ToolSpec) {
@@ -482,7 +621,8 @@ func runLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req RunReque
 	})
 	systemPrompt := "你是 MiniVerse 游戏服务端智能运维与故障诊断 Agent。仅可基于 MCP 工具返回的真实观测数据得出结论，禁止编造日志、库存或健康状态。" +
 		"若 allow_propose 为 true 且确实需要补偿或止损，只能调用 propose_* 工具创建 pending 审批单，并明确告知需要人类 reviewer 审核；绝不能声称变更已生效。" +
-		"最后请只输出 JSON 对象（无 markdown 代码块），包含字段：summary、root_cause、recommendation。"
+		"请优先使用 search_runbook 与 inspect_player_summary 做渐进式排查以降低上下文开销。" +
+		"最后请只输出 JSON 对象（无 markdown 代码块），包含字段：summary、root_cause、recommendation、evidence_ids（字符串数组，列出引用的真实 request_id 或 error_code）。"
 
 	messages := []chatMessage{
 		{Role: "system", Content: systemPrompt},
@@ -507,34 +647,17 @@ func runLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req RunReque
 		}
 
 		messages = append(messages, respMsg)
+		loopBroken := false
 		for _, tc := range respMsg.ToolCalls {
 			if stepNum >= MaxSteps {
 				break
 			}
 			stepNum++
-			tStart := time.Now()
 			argsText := strings.TrimSpace(tc.Function.Arguments)
 			if argsText == "" {
 				argsText = "{}"
 			}
-			var outText string
-			var structured any
-			var isErr bool
-
-			if _, ok := allowedMap[tc.Function.Name]; !ok {
-				isErr = true
-				outText = `{"error":"tool_not_allowed"}`
-			} else {
-				var callErr error
-				outText, structured, isErr, callErr = client.CallTool(ctx, tc.Function.Name, json.RawMessage(argsText))
-				if callErr != nil {
-					isErr = true
-					errJSON, _ := json.Marshal(map[string]string{"error": callErr.Error()})
-					outText = string(errJSON)
-				}
-			}
-
-			truncatedOut := truncateRunes(outText, maxStepResultChars)
+			truncatedOut, structured, isErr, durMS, broke := executeToolWithGateway(ctx, client, allowedMap, req.Gateway, req.EventSink, stepNum, tc.Function.Name, argsText)
 			res.Steps = append(res.Steps, StepTrace{
 				StepIndex:     stepNum,
 				ToolName:      tc.Function.Name,
@@ -542,7 +665,7 @@ func runLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req RunReque
 				ResultSummary: truncatedOut,
 				Structured:    structured,
 				IsError:       isErr,
-				DurationMS:    time.Since(tStart).Milliseconds(),
+				DurationMS:    durMS,
 			})
 			if pid := extractProposalID(tc.Function.Name, structured, isErr); pid != "" {
 				res.ProposalRequestID = pid
@@ -552,6 +675,17 @@ func runLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req RunReque
 				ToolCallID: tc.ID,
 				Content:    truncatedOut,
 			})
+			if broke {
+				loopBroken = true
+				break
+			}
+		}
+		if loopBroken {
+			res.Status = "loop_circuit_broken"
+			res.Summary = "AI 安全网关检测到重复无效工具调用死循环，已主动熔断。"
+			res.RootCause = "Agent 连续使用相同参数重复调用同一 MCP 工具，触发 ToolPreInvokeHook 死循环保护。"
+			res.Recommendation = "请核对已采集的 MCP 步骤证据，或补充更明确的 player_id / request_id。"
+			return res, nil
 		}
 		if stepNum >= MaxSteps {
 			break
@@ -671,7 +805,8 @@ func runAnthropicLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req
 	})
 	systemPrompt := "你是 MiniVerse 游戏服务端智能运维与故障诊断 Agent。仅可基于 MCP 工具返回的真实观测数据得出结论，禁止编造日志、库存或健康状态。" +
 		"若 allow_propose 为 true 且确实需要补偿或止损，只能调用 propose_* 工具创建 pending 审批单，并明确告知需要人类 reviewer 审核；绝不能声称变更已生效。" +
-		"最后请只输出 JSON 对象（无 markdown 代码块），包含字段：summary、root_cause、recommendation。"
+		"请优先使用 search_runbook 与 inspect_player_summary 做渐进式排查以降低上下文开销。" +
+		"最后请只输出 JSON 对象（无 markdown 代码块），包含字段：summary、root_cause、recommendation、evidence_ids（字符串数组，列出引用的真实 request_id 或 error_code）。"
 
 	messages := []anthropicMessage{
 		{Role: "user", Content: fmt.Sprintf("上下文：%s\n问题：%s", string(reqCtxJSON), req.Question)},
@@ -707,6 +842,7 @@ func runAnthropicLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req
 		})
 
 		toolResults := make([]map[string]any, 0, len(toolUses))
+		loopBroken := false
 		for _, tu := range toolUses {
 			if stepNum >= MaxSteps {
 				break
@@ -716,25 +852,7 @@ func runAnthropicLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req
 			if len(bytes.TrimSpace(rawArgs)) == 0 {
 				rawArgs = json.RawMessage("{}")
 			}
-			tStart := time.Now()
-			var (
-				outText    string
-				structured any
-				isErr      bool
-			)
-			if _, ok := allowedMap[tu.Name]; !ok {
-				outText = "tool_not_allowed_for_current_request"
-				isErr = true
-			} else {
-				var callErr error
-				outText, structured, isErr, callErr = client.CallTool(ctx, tu.Name, rawArgs)
-				if callErr != nil {
-					outText = callErr.Error()
-					isErr = true
-				}
-			}
-			dur := time.Since(tStart).Milliseconds()
-			truncatedOut := truncateRunes(outText, maxStepResultChars)
+			truncatedOut, structured, isErr, dur, broke := executeToolWithGateway(ctx, client, allowedMap, req.Gateway, req.EventSink, stepNum, tu.Name, string(rawArgs))
 			res.Steps = append(res.Steps, StepTrace{
 				StepIndex:     stepNum,
 				ToolName:      tu.Name,
@@ -753,11 +871,22 @@ func runAnthropicLLM(ctx context.Context, cfg ModelConfig, client MCPClient, req
 				"content":     truncatedOut,
 				"is_error":    isErr,
 			})
+			if broke {
+				loopBroken = true
+				break
+			}
 		}
 		messages = append(messages, anthropicMessage{
 			Role:    "user",
 			Content: toolResults,
 		})
+		if loopBroken {
+			res.Status = "loop_circuit_broken"
+			res.Summary = "AI 安全网关检测到重复无效工具调用死循环，已主动熔断。"
+			res.RootCause = "Agent 连续使用相同参数重复调用同一 MCP 工具，触发 ToolPreInvokeHook 死循环保护。"
+			res.Recommendation = "请核对已采集的 MCP 步骤证据，或补充更明确的 player_id / request_id。"
+			return res, nil
+		}
 		if stepNum >= MaxSteps {
 			break
 		}
@@ -848,14 +977,16 @@ func parseFinalAnswer(raw string, res *RunResult) {
 	cleaned = strings.TrimSpace(cleaned)
 
 	var parsed struct {
-		Summary        string `json:"summary"`
-		RootCause      string `json:"root_cause"`
-		Recommendation string `json:"recommendation"`
+		Summary        string   `json:"summary"`
+		RootCause      string   `json:"root_cause"`
+		Recommendation string   `json:"recommendation"`
+		EvidenceIDs    []string `json:"evidence_ids"`
 	}
 	if json.Unmarshal([]byte(cleaned), &parsed) == nil && (parsed.Summary != "" || parsed.RootCause != "") {
 		res.Summary = parsed.Summary
 		res.RootCause = parsed.RootCause
 		res.Recommendation = parsed.Recommendation
+		res.EvidenceIDs = parsed.EvidenceIDs
 		return
 	}
 	res.Summary = truncateRunes(cleaned, 1500)

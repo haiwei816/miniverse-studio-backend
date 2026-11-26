@@ -83,3 +83,17 @@ func TestCleanupOpsAgentHistoryAndSaveHistory(t *testing.T) {
 		t.Fatalf("unexpected save_history cleanup query: %#v", f.calls[2])
 	}
 }
+
+func TestCleanupDistributedAndAIAudits(t *testing.T) {
+	f := &cleanupFake{}
+	now := time.Unix(2000000000, 0)
+	cleanupDistributedAndAIAudits(context.Background(), f, now)
+	if len(f.calls) != 3 {
+		t.Fatalf("expected 3 cleanup calls, got %d", len(f.calls))
+	}
+	if !strings.Contains(f.calls[0].query, "DELETE FROM outbox_events") ||
+		!strings.Contains(f.calls[1].query, "DELETE FROM mq_consumed_events") ||
+		!strings.Contains(f.calls[2].query, "DELETE FROM ai_gateway_audits") {
+		t.Fatalf("unexpected queries: %#v", f.calls)
+	}
+}

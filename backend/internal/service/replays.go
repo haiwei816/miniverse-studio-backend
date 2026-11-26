@@ -8,7 +8,9 @@ import (
 	"errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"math/big"
+	"miniverse/backend/internal/httpserver"
 	"miniverse/backend/internal/rulepb"
 	"net/http"
 	"strconv"
@@ -117,23 +119,58 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 		if address == "" {
 			address = "rulecore:50051"
 		}
+		if s.ruleBreaker != nil {
+			if allowed, _ := s.ruleBreaker.Allow(); !allowed {
+				if s.Telemetry != nil {
+					s.Telemetry.RecordRuleCoreCircuitOpen()
+					s.Telemetry.RecordRuleCore(false, 0, "rulecore_circuit_open")
+				}
+				return nil, bad(503, "rulecore_circuit_open")
+			}
+		}
 		client, e := s.ruleClient(address)
 		if e != nil {
+			if s.ruleBreaker != nil {
+				s.ruleBreaker.Record(false)
+			}
 			if s.Telemetry != nil {
 				s.Telemetry.RecordRuleCore(false, 0, "rulecore_unavailable")
 			}
 			return nil, bad(503, "rulecore_unavailable")
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		// Downstream timeout budget: min(2s, remaining parent deadline - 500ms reserve for DB commit).
+		rpcTimeout := 2 * time.Second
+		if dl, ok := r.Context().Deadline(); ok {
+			rem := time.Until(dl) - 500*time.Millisecond
+			if rem < 200*time.Millisecond {
+				rem = 200 * time.Millisecond
+			}
+			if rem < rpcTimeout {
+				rpcTimeout = rem
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 		defer cancel()
+		if reqID := httpserver.RequestID(r.Context()); reqID != "" {
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-request-id", reqID)
+		}
+		if tp := httpserver.TraceParent(r.Context()); tp != "" {
+			ctx = metadata.AppendToOutgoingContext(ctx, "traceparent", tp)
+		}
 		rpcStart := time.Now()
 		out, e := client.Replay(ctx, &rulepb.ReplayRequest{Version: b.Version, Seed: b.Seed, Actions: b.Actions})
 		rpcElapsed := time.Since(rpcStart)
 		if e != nil {
+			if s.ruleBreaker != nil {
+				s.ruleBreaker.Record(false)
+			}
 			if s.Telemetry != nil {
 				s.Telemetry.RecordRuleCore(false, rpcElapsed, "rulecore_unavailable")
 			}
 			return nil, bad(503, "rulecore_unavailable")
+		}
+		if s.ruleBreaker != nil {
+			s.ruleBreaker.Record(true)
 		}
 		if s.Telemetry != nil {
 			s.Telemetry.RecordRuleCore(true, rpcElapsed, "")
@@ -155,7 +192,10 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 		if b.MatchID != "" {
 			trust = "server_seeded_replay"
 		}
+		var boardScoreUpdated bool
+		var boardReached int64
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
+			boardScoreUpdated = false
 			var existing string
 			e := tx.QueryRowContext(r.Context(), "SELECT payload_hash FROM replays WHERE game_id=? AND player_id=? AND request_id=? FOR UPDATE", g, p, id).Scan(&existing)
 			if e == nil {
@@ -220,14 +260,20 @@ func (s *Service) replayRoutes(m *http.ServeMux) {
 					return e
 				}
 				if e == sql.ErrNoRows || out.Score > old {
-					if _, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, b.Board, b.Season, p, out.Score, time.Now().UnixNano()); e != nil {
+					reached := time.Now().UnixNano()
+					if _, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, b.Board, b.Season, p, out.Score, reached); e != nil {
 						return e
 					}
+					boardReached = reached
+					boardScoreUpdated = true
 				}
 			}
 			_, e = tx.ExecContext(r.Context(), "INSERT INTO replays(game_id,player_id,request_id,payload_hash,rule_version,seed,actions,score,state_hash) VALUES(?,?,?,?,?,?,?,?,?)", g, p, id, payloadHash, b.Version, b.Seed, actions, out.Score, strconv.FormatUint(out.StateHash, 10))
 			return e
 		})
+		if e == nil && boardScoreUpdated {
+			s.updateBoardScoreRedis(r.Context(), g, b.Board, b.Season, "max", p, out.Score, boardReached)
+		}
 		return map[string]any{"valid": out.Valid, "score": out.Score, "state_hash": strconv.FormatUint(out.StateHash, 10), "finished": out.Finished, "victory": out.Victory, "trust": trust}, e
 	})
 }

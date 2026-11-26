@@ -1,12 +1,26 @@
 package service
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+var apiRedisRateScript = redis.NewScript(`
+local current = redis.call("INCR", KEYS[1])
+if current == 1 then
+	redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+if current > tonumber(ARGV[1]) then
+	return 0
+end
+return 1
+`)
 
 const maxLimitEntries = 10000
 
@@ -80,5 +94,21 @@ func (s *Service) allowRequest(host string, now time.Time) bool {
 	}
 	b.n++
 	s.limits[host] = b
+	if s.Redis != nil && s.Redis.Raw() != nil {
+		return s.allowRequestRedis(host, now)
+	}
 	return true
+}
+
+func (s *Service) allowRequestRedis(host string, now time.Time) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	minuteSlot := now.UTC().Format("200601021504")
+	key := "mv:rl:api:" + host + ":" + minuteSlot
+	res, err := apiRedisRateScript.Run(ctx, s.Redis.Raw(), []string{key}, 600, int64(70000)).Int64()
+	if err != nil {
+		// Degrade gracefully to local bucket enforcement if Redis times out.
+		return true
+	}
+	return res == 1
 }

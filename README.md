@@ -115,6 +115,10 @@ npm run desktop:build  # 打包：src-tauri/target/release/bundle/
 
 ## 文档
 
+- [系统教学与社招面试实战指南（推荐优先阅读）](docs/PROJECT_TEACHING_GUIDE.md)
+- [2027 旗舰升级总控方案](docs/UPGRADE_MASTER_PLAN.md)
+- [2027 实测压测与 Golden Set 消融评测战报](docs/verification/TROUBLESHOOTING_AND_BENCHMARK_2027.md)
+- [ADR-0003：分级一致性模型与四钩子 AI 安全网关](docs/adr/0003-hybrid-consistency-and-ai-gateway.md)
 - [架构与数据流程](docs/architecture.md)
 - [MCP 服务与 AI Ops Agent 智能运维](docs/mcp-ops-agent.md)
 - [接口契约](docs/api.md)

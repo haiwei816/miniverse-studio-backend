@@ -45,20 +45,24 @@ MiniVerse Studio Backend 内置符合 **MCP JSON-RPC 2.0**（`protocolVersion: "
 
 ## 3. MCP 工具与资源清单
 
-### 3.1 工具列表（8 个）
+### 3.1 工具列表（12 个）
 
 | 工具名 | 权限类别 | 说明与主要关联表 |
 | --- | --- | --- |
-| `inspect_service_health` | ReadOnly | 返回 `db_ready`、连接池 `db_pool`、Schema 版本、5 分钟 QPS/错误率、P50/P95、死锁重试、限流及 RuleCore 实时探活状态 |
+| `inspect_service_health` | ReadOnly | 返回 `db_ready`、连接池 `db_pool`、Schema 版本、5 分钟 QPS/错误率、P50/P95/P99、死锁重试、限流及 RuleCore 实时探活状态 |
 | `diagnose_player` | ReadOnly | 聚合 360° 玩家视图：档案、云存档、近期存档历史、活动进度、发奖流水、库存、流水账本、邮件、事件、榜分、回放与近期 `ops_events` |
+| `inspect_player_summary` | ReadOnly | 轻量级渐进式摘要（未领/过期邮件计数与近 3 条 `ops_events`），用于低 Token 消耗的首轮定位 |
+| `search_runbook` | ReadOnly | 渐进式检索运维 Runbook 知识库分块（BM25/关键词重排），按需返回 Top-K 排障章节 |
 | `query_ops_logs` | ReadOnly | 按 `game_id`、`player_id`、`request_id`、`error_code`、`category`、`since` 检索 `ops_events`（限制最多 100 条） |
 | `trace_request` | ReadOnly | 根据 `X-Request-ID` 横向关联同游戏下的 `ops_events` 与 `audits` 操作记录 |
 | `explain_reward_issue` | ReadOnly | 专项诊断“完成活动未收到道具”：串查活动开放窗、`client_allowed`、事件上报、`activity_progress`、`grants`、`mail`（未领/过期/已删/已领）与 `inventory_ledger` |
 | `query_audit_trail` | ReadOnly | 查询指定游戏最近的 `audits` 审计记录与 `gm_requests` 审批工单 |
-| `propose_reward_compensation` | 受控写（`admin`/`operator`） | 生成单玩家 `kind='reward'` 补偿审批单（`state='pending'`），需人工复核批准 |
+| `inspect_mq_and_jobs` | ReadOnly | 查询 Transactional Outbox 事件积压/DLQ 状态与 `batch_grant_jobs` 异步发奖进度 |
+| `propose_reward_compensation` | 受控写（`admin`/`operator`） | 生成单玩家 `kind='reward'` 补偿审批单（`state='pending'`），受 AI 网关单笔上限保护且需人工复核批准 |
 | `propose_activity_stop` | 受控写（`admin`/`operator`） | 生成 `kind='activity_stop'` 停用异常活动审批单（`state='pending'`），人工批准后将 `activities.active` 设为 `FALSE` |
+| `propose_player_freeze` | 受控写（`admin`/`operator`） | 生成 `kind='player_ban'` 封禁异常玩家审批单（`state='pending'`），人工批准后秒级踢下线 |
 
-> 为防止大模型上下文爆仓，MCP 返回文本超过 **16 KB** 时自动截断，并标注截断提示；内部 Agent 每步结果摘要上限为 **6000 字符**，单次运行最多 **6 步**工具调用。
+> 系统已统一接入四钩子安全 AI 网关（`internal/aigateway`：PII 脱敏与注入拦截、Schema/OPA 策略与死循环熔断、合法 JSON 裁剪、Groundedness 幻觉降级），并在 `POST /gm/games/{game}/ops-agent/diagnose/stream` 提供 SSE 流式诊断推送。
 
 ### 3.2 只读资源（3 个）
 

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"miniverse/backend/internal/aigateway"
+	"miniverse/backend/internal/httpserver"
 	"miniverse/backend/internal/opsagent"
 	"net/http"
 	"net/url"
@@ -514,10 +516,17 @@ func (s *Service) companionChatFor(r *http.Request, p, game string) (any, error)
 		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && !(s.Sandbox && u.Scheme == "http")) {
 			return nil, bad(503, "companion_model_configuration_invalid")
 		}
-		reply, e = callCompanionModel(r.Context(), endpoint, s.CompanionAPIKey, s.CompanionModel, s.Sandbox, companionSystemPrompt(c, world, mem), b.Message, b.History...)
+		gw := aigateway.NewSession(httpserver.TraceID(r.Context()), "companion", game, p, s, b.Message)
+		maskedMsg, blocked := gw.HookLLMInput(r.Context(), b.Message)
+		if blocked != "" {
+			return nil, bad(400, blocked)
+		}
+		maskedSys, _ := gw.HookLLMInput(r.Context(), companionSystemPrompt(c, world, mem))
+		reply, e = callCompanionModel(r.Context(), endpoint, s.CompanionAPIKey, s.CompanionModel, s.Sandbox, maskedSys, maskedMsg, b.History...)
 		if e != nil {
 			return nil, e
 		}
+		reply = gw.Vault.Unmask(reply)
 	}
 	current, e := s.companionContext(r.Context(), p)
 	if e != nil {

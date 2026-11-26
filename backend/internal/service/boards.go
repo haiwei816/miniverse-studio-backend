@@ -89,13 +89,18 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 		if requiresReplay > 0 {
 			return nil, bad(403, "replay_required")
 		}
+		var boardMode string
+		var finalScore, finalReached int64
+		var scoreUpdated bool
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
+			scoreUpdated = false
 			var mode string
 			var start, end int64
 			var frozen bool
 			if e := tx.QueryRowContext(r.Context(), "SELECT mode,starts_at,ends_at,frozen FROM boards WHERE game_id=? AND id=? AND season=? FOR SHARE", g, id, season).Scan(&mode, &start, &end, &frozen); e != nil {
 				return bad(404, "board_not_found")
 			}
+			boardMode = mode
 			now := time.Now()
 			if frozen || now.Unix() < start || now.Unix() >= end {
 				return bad(409, "season_closed")
@@ -131,15 +136,43 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 					}
 				}
 			}
-			_, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, id, season, p, next, now.UnixNano())
-			return e
+			reached := now.UnixNano()
+			if _, e = tx.ExecContext(r.Context(), "INSERT INTO scores(game_id,board_id,season,player_id,score,reached_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE score=VALUES(score),reached_at=VALUES(reached_at)", g, id, season, p, next, reached); e != nil {
+				return e
+			}
+			finalScore = next
+			finalReached = reached
+			scoreUpdated = true
+			return nil
 		})
+		if e == nil && scoreUpdated {
+			s.updateBoardScoreRedis(r.Context(), g, id, season, boardMode, p, finalScore, finalReached)
+		}
 		return map[string]any{"ok": true, "trust": "client_unverified"}, e
 	})
 	s.handle(m, "GET "+base, func(r *http.Request) (any, error) {
 		g, p, e := s.scope(r)
 		if e != nil {
 			return nil, e
+		}
+		boardID, season := r.PathValue("board"), r.PathValue("season")
+		if s.Redis != nil && s.Redis.Raw() != nil {
+			var mode string
+			if err := s.DB.QueryRowContext(r.Context(), "SELECT mode FROM boards WHERE game_id=? AND id=? AND season=?", g, boardID, season).Scan(&mode); err != nil {
+				return nil, bad(404, "board_not_found")
+			}
+			if top, near, ok := s.readBoardFromRedis(r.Context(), g, boardID, season, mode, p); ok {
+				trust := "client_unverified"
+				var requireTicket bool
+				if err := s.DB.QueryRowContext(r.Context(), "SELECT require_ticket FROM rule_boards WHERE game_id=? AND board_id=? AND season=? LIMIT 1", g, boardID, season).Scan(&requireTicket); err == nil {
+					if requireTicket {
+						trust = "server_seeded_replay"
+					} else {
+						trust = "deterministic_replay"
+					}
+				}
+				return map[string]any{"top": top, "nearby": near, "trust": trust}, nil
+			}
 		}
 		var out any
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
@@ -201,6 +234,9 @@ func (s *Service) boardRoutes(m *http.ServeMux) {
 		e = s.transaction(r.Context(), func(tx *sql.Tx) error {
 			return settleBoardTx(r.Context(), tx, g, id, season)
 		})
+		if e == nil {
+			s.invalidateBoardRedis(r.Context(), g, id, season)
+		}
 		return map[string]bool{"ok": true}, e
 	})
 	s.handle(m, "GET /gm/games/{game}/boards", func(r *http.Request) (any, error) {

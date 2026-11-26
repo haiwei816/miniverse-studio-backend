@@ -6,16 +6,102 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"miniverse/backend/internal/database"
 	"miniverse/backend/internal/httpserver"
 	"miniverse/backend/internal/telemetry"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+type opsEventTask struct {
+	ev        telemetry.Event
+	rawDetail []byte
+}
+
+func (s *Service) startOpsWriter() {
+	if s.opsCh != nil {
+		return
+	}
+	s.opsCh = make(chan opsEventTask, 2048)
+	s.opsStopCh = make(chan struct{})
+	s.opsDoneCh = make(chan struct{})
+	go s.runOpsEventWriter()
+}
+
+func (s *Service) stopOpsWriter() {
+	if s.opsCh == nil {
+		return
+	}
+	s.opsStopOnce.Do(func() {
+		close(s.opsStopCh)
+		<-s.opsDoneCh
+	})
+}
+
+func (s *Service) runOpsEventWriter() {
+	defer close(s.opsDoneCh)
+	const maxBatch = 64
+	batch := make([]opsEventTask, 0, maxBatch)
+	flush := func() {
+		if len(batch) == 0 || s.DB == nil {
+			batch = batch[:0]
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var b strings.Builder
+		b.WriteString("INSERT INTO ops_events(request_id,game_id,player_id,category,method,path,status_code,error_code,latency_ms,detail,created_at) VALUES ")
+		args := make([]any, 0, len(batch)*11)
+		for i, t := range batch {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString("(?,?,?,?,?,?,?,?,?,?,?)")
+			args = append(args, t.ev.RequestID, t.ev.GameID, t.ev.PlayerID, t.ev.Category, t.ev.Method, t.ev.Path, t.ev.StatusCode, t.ev.ErrorCode, t.ev.LatencyMS, t.rawDetail, t.ev.CreatedAt)
+		}
+		if _, err := s.DB.ExecContext(ctx, b.String(), args...); err != nil {
+			slog.Warn("ops_events_batch_insert_failed", "count", len(batch), "error", err)
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-s.opsStopCh:
+			for {
+				select {
+				case t := <-s.opsCh:
+					batch = append(batch, t)
+					if len(batch) >= maxBatch {
+						flush()
+					}
+				default:
+					flush()
+					return
+				}
+			}
+		case first := <-s.opsCh:
+			batch = append(batch, first)
+			// Coalesce burst arrivals briefly (or immediately flush when only 1 arrived) so single anomalies persist quickly without saturating DB connections during storms.
+			drain:
+			for len(batch) < maxBatch {
+				select {
+				case t := <-s.opsCh:
+					batch = append(batch, t)
+				default:
+					break drain
+				}
+			}
+			flush()
+		}
+	}
+}
 
 func classifyOpsCategory(status int, code string) string {
 	switch {
@@ -75,11 +161,45 @@ func (s *Service) recordOpsEvent(r *http.Request, category string, status int, e
 	if !s.PersistOpsEvents || s.DB == nil {
 		return
 	}
+	// Burst-sample 429 rate-limit anomalies (at most 1 persisted DB row per error_code+path per second)
+	// so CC flood traffic cannot saturate MySQL connection pool.
+	if category == "rate_limit" {
+		sampleKey := errorCode + ":" + r.URL.Path
+		s.opsRateMu.Lock()
+		if s.opsRateLastLog == nil {
+			s.opsRateLastLog = map[string]int64{}
+		}
+		last := s.opsRateLastLog[sampleKey]
+		if now == last {
+			s.opsRateMu.Unlock()
+			if s.Telemetry != nil {
+				s.Telemetry.RecordOpsEventDropped()
+			}
+			return
+		}
+		if len(s.opsRateLastLog) > 1024 {
+			clear(s.opsRateLastLog)
+		}
+		s.opsRateLastLog[sampleKey] = now
+		s.opsRateMu.Unlock()
+	}
+
 	var rawDetail []byte
 	if detail != nil {
 		rawDetail, _ = json.Marshal(detail)
 	} else {
 		rawDetail = []byte("{}")
+	}
+	if s.opsCh != nil {
+		select {
+		case s.opsCh <- opsEventTask{ev: ev, rawDetail: rawDetail}:
+			return
+		default:
+			if s.Telemetry != nil {
+				s.Telemetry.RecordOpsEventDropped()
+			}
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -425,6 +545,43 @@ func (s *Service) opsObservabilityRoutes(m *http.ServeMux) {
 		}
 		return s.playerDiagnostics(r.Context(), a.Game, r.PathValue("player"))
 	})
+
+	authorizePprof := func(w http.ResponseWriter, r *http.Request) bool {
+		if s.authorizeMetricsScraper(r) {
+			return true
+		}
+		gm, err := s.gmSession(r)
+		if err != nil || gm.Role != "admin" {
+			w.Header().Set("Content-Type", "application/json")
+			if err == nil {
+				w.WriteHeader(403)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			} else {
+				w.WriteHeader(401)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "gm_unauthorized"})
+			}
+			return false
+		}
+		return true
+	}
+	wrapPprof := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !authorizePprof(w, r) {
+				return
+			}
+			h(w, r)
+		}
+	}
+	m.HandleFunc("GET /gm/system/pprof/", wrapPprof(func(w http.ResponseWriter, r *http.Request) {
+		// Rewrite prefix so net/http/pprof resolves /debug/pprof/... cleanly.
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/debug/pprof/" + strings.TrimPrefix(r.URL.Path, "/gm/system/pprof/")
+		pprof.Index(w, r2)
+	}))
+	m.HandleFunc("GET /gm/system/pprof/cmdline", wrapPprof(pprof.Cmdline))
+	m.HandleFunc("GET /gm/system/pprof/profile", wrapPprof(pprof.Profile))
+	m.HandleFunc("GET /gm/system/pprof/symbol", wrapPprof(pprof.Symbol))
+	m.HandleFunc("GET /gm/system/pprof/trace", wrapPprof(pprof.Trace))
 }
 
 func (s *Service) authorizeMetricsScraper(r *http.Request) bool {

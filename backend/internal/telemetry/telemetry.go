@@ -80,10 +80,17 @@ type Snapshot struct {
 	LatencyP50MS        int64          `json:"latency_p50_ms"`
 	LatencyP95MS        int64          `json:"latency_p95_ms"`
 	LatencyP99MS        int64          `json:"latency_p99_ms"`
-	DeadlockRetries     int64          `json:"deadlock_retries"`
-	RateLimited         int64          `json:"rate_limited"`
-	AuthRateLimited     int64          `json:"auth_rate_limited"`
-	RuleCoreAddr        string         `json:"rulecore_addr"`
+	DeadlockRetries      int64          `json:"deadlock_retries"`
+	RateLimited          int64          `json:"rate_limited"`
+	AuthRateLimited      int64          `json:"auth_rate_limited"`
+	OpsEventsDropped     int64          `json:"ops_events_dropped"`
+	CacheHits            int64          `json:"cache_hits"`
+	CacheMisses          int64          `json:"cache_misses"`
+	AIGatewayBlocked     int64          `json:"ai_gateway_blocked"`
+	RuleCoreCircuitOpens int64          `json:"rulecore_circuit_opens"`
+	OutboxDispatched     int64          `json:"outbox_dispatched"`
+	OutboxDLQ            int64          `json:"outbox_dlq"`
+	RuleCoreAddr         string         `json:"rulecore_addr"`
 	RuleCoreCalls       int64          `json:"rulecore_calls"`
 	RuleCoreErrors      int64          `json:"rulecore_errors"`
 	RuleCoreHealthy     *bool          `json:"rulecore_healthy"`
@@ -105,9 +112,16 @@ type Recorder struct {
 	status4xx     atomic.Int64
 	status5xx     atomic.Int64
 
-	deadlockRetries atomic.Int64
-	rateLimited     atomic.Int64
-	authRateLimited atomic.Int64
+	deadlockRetries      atomic.Int64
+	rateLimited          atomic.Int64
+	authRateLimited      atomic.Int64
+	opsEventsDropped     atomic.Int64
+	cacheHits            atomic.Int64
+	cacheMisses          atomic.Int64
+	aiGatewayBlocked     atomic.Int64
+	ruleCoreCircuitOpens atomic.Int64
+	outboxDispatched     atomic.Int64
+	outboxDLQ            atomic.Int64
 
 	ruleCoreCalls  atomic.Int64
 	ruleCoreErrors atomic.Int64
@@ -247,6 +261,48 @@ func (r *Recorder) RecordAuthRateLimit() {
 	}
 }
 
+func (r *Recorder) RecordOpsEventDropped() {
+	if r != nil {
+		r.opsEventsDropped.Add(1)
+	}
+}
+
+func (r *Recorder) RecordCacheHit() {
+	if r != nil {
+		r.cacheHits.Add(1)
+	}
+}
+
+func (r *Recorder) RecordCacheMiss() {
+	if r != nil {
+		r.cacheMisses.Add(1)
+	}
+}
+
+func (r *Recorder) RecordAIGatewayBlocked() {
+	if r != nil {
+		r.aiGatewayBlocked.Add(1)
+	}
+}
+
+func (r *Recorder) RecordRuleCoreCircuitOpen() {
+	if r != nil {
+		r.ruleCoreCircuitOpens.Add(1)
+	}
+}
+
+func (r *Recorder) RecordOutboxDispatched(n int64) {
+	if r != nil && n > 0 {
+		r.outboxDispatched.Add(n)
+	}
+}
+
+func (r *Recorder) RecordOutboxDLQ() {
+	if r != nil {
+		r.outboxDLQ.Add(1)
+	}
+}
+
 // RecordRuleCore records the result and latency of a RuleCore gRPC call or health probe.
 func (r *Recorder) RecordRuleCore(ok bool, latency time.Duration, errCode string) {
 	if r == nil {
@@ -331,10 +387,17 @@ func (r *Recorder) Snapshot(db *sql.DB, schemaVersion int, ruleCoreAddr string) 
 		Status2xx:       r.status2xx.Load(),
 		Status4xx:       r.status4xx.Load(),
 		Status5xx:       r.status5xx.Load(),
-		DeadlockRetries: r.deadlockRetries.Load(),
-		RateLimited:     r.rateLimited.Load(),
-		AuthRateLimited: r.authRateLimited.Load(),
-		RuleCoreAddr:    ruleCoreAddr,
+		DeadlockRetries:      r.deadlockRetries.Load(),
+		RateLimited:          r.rateLimited.Load(),
+		AuthRateLimited:      r.authRateLimited.Load(),
+		OpsEventsDropped:     r.opsEventsDropped.Load(),
+		CacheHits:            r.cacheHits.Load(),
+		CacheMisses:          r.cacheMisses.Load(),
+		AIGatewayBlocked:     r.aiGatewayBlocked.Load(),
+		RuleCoreCircuitOpens: r.ruleCoreCircuitOpens.Load(),
+		OutboxDispatched:     r.outboxDispatched.Load(),
+		OutboxDLQ:            r.outboxDLQ.Load(),
+		RuleCoreAddr:         ruleCoreAddr,
 		RuleCoreCalls:   r.ruleCoreCalls.Load(),
 		RuleCoreErrors:  r.ruleCoreErrors.Load(),
 	}
@@ -450,6 +513,13 @@ func PrometheusText(snap Snapshot) string {
 	writeGauge("miniverse_db_connections_in_use", "Current in-use MySQL connections", snap.DBPool.InUse)
 	writeCounter("miniverse_deadlock_retries_total", "Total MySQL deadlock/lock-timeout retries", snap.DeadlockRetries)
 	writeCounter("miniverse_rate_limited_total", "Total rate-limited HTTP requests", snap.RateLimited+snap.AuthRateLimited)
+	writeCounter("miniverse_ops_events_dropped_total", "Total anomaly events dropped due to bounded async queue saturation", snap.OpsEventsDropped)
+	writeCounter("miniverse_cache_hits_total", "Total L1/L2 cache hits", snap.CacheHits)
+	writeCounter("miniverse_cache_misses_total", "Total L1/L2 cache misses", snap.CacheMisses)
+	writeCounter("miniverse_ai_gateway_blocked_total", "Total AI requests/tool calls blocked or downgraded by 4-hook gateway", snap.AIGatewayBlocked)
+	writeCounter("miniverse_rulecore_circuit_opens_total", "Total RuleCore gRPC fast-fail rejections due to open circuit breaker", snap.RuleCoreCircuitOpens)
+	writeCounter("miniverse_outbox_dispatched_total", "Total transactional outbox events dispatched to Kafka", snap.OutboxDispatched)
+	writeCounter("miniverse_outbox_dlq_total", "Total outbox/consumer messages routed to DLQ", snap.OutboxDLQ)
 	writeCounter("miniverse_rulecore_calls_total", "Total RuleCore gRPC calls and probes", snap.RuleCoreCalls)
 	writeCounter("miniverse_rulecore_errors_total", "Total failed RuleCore gRPC calls and probes", snap.RuleCoreErrors)
 	writeGauge("miniverse_schema_version", "Expected database migration schema version", snap.SchemaVersion)

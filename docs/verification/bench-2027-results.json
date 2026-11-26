@@ -1,0 +1,48 @@
+{
+  "generated_at": "2026-11-26T15:06:59+08:00",
+  "scenarios": [
+    {
+      "name": "http_health_c32",
+      "concurrency": 32,
+      "requests": 114659,
+      "errors": 0,
+      "status_2xx": 114659,
+      "status_429": 0,
+      "status_5xx": 0,
+      "duration_ms": 8003,
+      "rps": 14326.959588362593,
+      "p50_ms": 2.0809,
+      "p95_ms": 4.269,
+      "p99_ms": 6.4398
+    },
+    {
+      "name": "leaderboard_redis_zset_c20",
+      "concurrency": 20,
+      "requests": 7843,
+      "errors": 0,
+      "status_2xx": 7843,
+      "status_429": 0,
+      "status_5xx": 0,
+      "duration_ms": 3004,
+      "rps": 2610.064659584738,
+      "p50_ms": 6.912,
+      "p95_ms": 13.0446,
+      "p99_ms": 18.81
+    },
+    {
+      "name": "profile_read_c20",
+      "concurrency": 20,
+      "requests": 31435,
+      "errors": 0,
+      "status_2xx": 3465,
+      "status_429": 27970,
+      "status_5xx": 0,
+      "duration_ms": 3003,
+      "rps": 10465.168848599718,
+      "p50_ms": 1.5556,
+      "p95_ms": 5.8313,
+      "p99_ms": 8.1509
+    }
+  ],
+  "target_url": "http://127.0.0.1:18080"
+}
